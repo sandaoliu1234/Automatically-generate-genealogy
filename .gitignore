@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+frontend/dist/
+
+# Environment variables
+backend/.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Trae documents
+.trae/
+
+# Qoder
+.qoder/
+
+.impeccable/
+
+PRODUCT.md
