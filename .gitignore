@@ -6,6 +6,8 @@ frontend/dist/
 
 # Environment variables
 backend/.env
+backend/.env.development
+backend/.env.*.local
 
 # IDE
 .vscode/
