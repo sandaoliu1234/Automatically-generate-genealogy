@@ -30,6 +30,7 @@ npm-debug.log*
 
 # Qoder
 .qoder/
+.cursor/
 
 .impeccable/
 

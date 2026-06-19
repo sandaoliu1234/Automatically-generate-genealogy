@@ -3,10 +3,14 @@ const router = express.Router();
 const aiService = require('../services/aiService');
 const { parseDocument } = require('../utils/documentParser');
 
+// 合法的 force 模式
+const VALID_FORCE_MODES = new Set(['auto', 'cloud', 'local']);
+
 router.post('/analyze', async (req, res) => {
   try {
     const { content, filename } = req.body;
     const userApiKey = req.headers['x-api-key'] || null;
+    const force = VALID_FORCE_MODES.has(req.query.force) ? req.query.force : 'auto';
 
     if (!content) {
       return res.status(400).json({
@@ -21,8 +25,9 @@ router.post('/analyze', async (req, res) => {
     console.log(`开始分析文档: ${filename || '未知文件'}`);
     console.log(`文档长度: ${content.length} 字符`);
     console.log(`使用API Key: ${userApiKey ? '用户自定义' : '默认配置'}`);
+    console.log(`调用模式: ${force}`);
 
-    const result = await aiService.analyzeDocument(content, userApiKey);
+    const result = await aiService.analyzeDocument(content, userApiKey, force);
 
     res.json({
       success: true,
@@ -45,6 +50,7 @@ router.post('/upload', async (req, res) => {
   try {
     const { file } = req;
     const userApiKey = req.headers['x-api-key'] || null;
+    const force = VALID_FORCE_MODES.has(req.query.force) ? req.query.force : 'auto';
 
     if (!file) {
       return res.status(400).json({
@@ -57,12 +63,13 @@ router.post('/upload', async (req, res) => {
     }
 
     const content = await parseDocument(file);
-    const result = await aiService.analyzeDocument(content, userApiKey);
+    const result = await aiService.analyzeDocument(content, userApiKey, force);
 
     res.json({
       success: true,
       data: result,
-      filename: file.originalname
+      filename: file.originalname,
+      force
     });
 
   } catch (error) {

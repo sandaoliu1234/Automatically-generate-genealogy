@@ -10,16 +10,34 @@
       </div>
 
       <div class="topbar-actions">
+        <span
+          v-if="providerBadge"
+          :class="['provider-badge', `tone-${providerBadge.tone}`]"
+          :title="providerBadge.hint || providerBadge.text"
+          aria-live="polite"
+        >
+          {{ providerBadge.text }}
+        </span>
         <button class="btn btn-icon" @click="undo" :disabled="!canUndo" aria-label="撤销 (Ctrl+Z)" title="撤销 (Ctrl+Z)">↶</button>
         <button class="btn btn-icon" @click="redo" :disabled="!canRedo" aria-label="重做 (Ctrl+Y)" title="重做 (Ctrl+Y)">↷</button>
         <span class="toolbar-sep"></span>
         <button class="btn btn-primary" @click="triggerFileUpload" :disabled="isLoading" aria-label="上传文档">
           {{ isLoading ? '分析中' : '上传文档' }}
         </button>
+        <button class="btn btn-plain" @click="openSearch" :disabled="!hasData" aria-label="搜索人物 (Ctrl+K)" title="搜索人物 (Ctrl+K)">
+          搜索人物
+        </button>
         <button class="btn btn-plain" @click="exportImage" :disabled="!hasData || isLoading" aria-label="导出图片">
           导出图片
         </button>
-        <button class="btn btn-plain danger" @click="clearAll" :disabled="!hasData || isLoading" aria-label="清空族谱">
+        <button class="btn btn-plain" @click="exportGedcom" :disabled="!hasData || isLoading" aria-label="导出 GEDCOM">
+          导出 GEDCOM
+        </button>
+        <button class="btn btn-plain" @click="toggleTheme" :aria-label="'切换到' + (theme === 'dark' ? '亮色' : '暗色') + '模式'" :title="'切换到' + (theme === 'dark' ? '亮色' : '暗色') + '模式'">
+          {{ theme === 'dark' ? '☀ 亮色' : '🌙 暗色' }}
+        </button>
+        <button class="btn btn-plain" @click="showHelp" aria-label="快捷键帮助" title="快捷键帮助 (?)">?</button>
+        <button class="btn btn-plain" @click="clearAll" :disabled="!hasData || isLoading" aria-label="清空族谱">
           清空
         </button>
         <button class="btn btn-plain" @click="showSettings = true" aria-label="打开设置">
@@ -28,16 +46,125 @@
       </div>
 
       <input
-        ref="fileInput"
-        type="file"
-        class="upload-input"
-        accept=".txt,.pdf,.doc,.docx"
-        @change="handleFileUpload"
-      />
+          ref="fileInput"
+          type="file"
+          class="upload-input"
+          accept=".txt,.pdf,.doc,.docx"
+          @change="handleFileUpload"
+        />
+        <input
+          ref="gedcomInput"
+          type="file"
+          class="upload-input"
+          accept=".ged"
+          @change="handleGedcomUpload"
+        />
     </header>
 
     <main class="workspace">
       <aside class="side-panel">
+        <section class="panel-section">
+          <p class="section-label">族谱会话</p>
+          <div class="session-header">
+            <button class="btn btn-sm" @click="createNewSession">+ 新建</button>
+            <button class="btn btn-sm btn-plain" @click="fetchSessions" title="刷新列表">↻</button>
+          </div>
+          <div class="session-list" v-if="sessions.length">
+            <div
+              v-for="session in sessions"
+              :key="session.id"
+              :class="['session-item', { active: session.id === currentSessionId }]"
+            >
+              <span v-if="editingSessionId !== session.id" class="session-name" @click="loadSession(session.id)">{{ session.name }}</span>
+              <input
+                v-else
+                v-model="sessionNameInput"
+                class="form-input session-name-input"
+                ref="sessionNameInputRef"
+                @blur="commitRenameSession"
+                @keyup.enter="commitRenameSession"
+                @keyup.esc="cancelRenameSession"
+              />
+              <div class="session-actions">
+                <button class="btn-icon-sm" @click.stop="startRenameSession(session)" title="重命名">✏️</button>
+                <button class="btn-icon-sm" @click.stop="saveCurrentSessionTo(session.id)" title="保存到本会话" :disabled="!hasData">💾</button>
+                <button class="btn-icon-sm danger" @click.stop="deleteSession(session.id)" title="删除">🗑️</button>
+              </div>
+            </div>
+          </div>
+          <p v-else class="hint-mini">暂无保存的族谱会话</p>
+          <div class="auto-save-row">
+            <label class="autosave-label">
+              <input type="checkbox" v-model="autoSaveEnabled"> 自动保存
+            </label>
+            <span v-if="isSaving" class="save-status saving">保存中…</span>
+            <span v-else-if="lastSavedAt" class="save-status saved">已保存 {{ formatTime(lastSavedAt) }}</span>
+            <span v-else class="save-status">未保存</span>
+          </div>
+        </section>
+
+        <!-- 统计图表：代际分布柱状图 + 性别比例环图 -->
+        <section v-if="hasData && nodes.length" class="panel-section">
+          <p class="section-label">族谱统计</p>
+
+          <p class="stat-sub">代际分布（{{ generationStats.length }} 代，共 {{ totalMembers }} 人）</p>
+          <svg
+            class="stat-chart"
+            viewBox="0 0 200 110"
+            preserveAspectRatio="none"
+            role="img"
+            aria-label="代际分布柱状图"
+          >
+            <line x1="22" :y1="100" x2="198" y2="100" class="stat-axis" />
+            <line x1="22" y1="10" x2="22" y2="100" class="stat-axis" />
+            <g
+              v-for="(item, idx) in generationStats"
+              :key="item.gen"
+              :transform="`translate(${22 + idx * generationBarWidth}, 0)`"
+            >
+              <rect
+                :x="generationBarWidth * 0.18"
+                :y="100 - item.height"
+                :width="generationBarWidth * 0.64"
+                :height="item.height"
+                :class="['stat-bar', item.gen === maxGen ? 'peak' : 'normal']"
+              >
+                <title>第 {{ item.gen }} 世：{{ item.count }} 人</title>
+              </rect>
+              <text :x="generationBarWidth / 2" y="108" class="stat-bar-label">{{ item.gen }}世</text>
+              <text :x="generationBarWidth / 2" :y="100 - item.height - 3" class="stat-bar-value">{{ item.count }}</text>
+            </g>
+          </svg>
+
+          <p class="stat-sub">性别比例（男 {{ genderStats.male }} / 女 {{ genderStats.female }}）</p>
+          <div class="gender-row">
+            <svg viewBox="0 0 60 60" class="gender-ring" role="img" aria-label="性别比例环图">
+              <circle cx="30" cy="30" r="24" class="gender-ring-bg" />
+              <circle
+                v-if="genderStats.male + genderStats.female > 0"
+                cx="30"
+                cy="30"
+                r="24"
+                class="gender-ring-male"
+                :stroke-dasharray="`${maleDash} ${circumference}`"
+                :stroke-dashoffset="0"
+                :transform="`rotate(-90 30 30)`"
+              />
+              <text x="30" y="34" class="gender-ring-text">{{ Math.round(genderStats.malePercent) }}%</text>
+            </svg>
+            <div class="gender-legend">
+              <div class="legend-item">
+                <span class="legend-swatch male"></span>
+                <span>男 {{ genderStats.male }}（{{ Math.round(genderStats.malePercent) }}%）</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-swatch female"></span>
+                <span>女 {{ genderStats.female }}（{{ Math.round(genderStats.femalePercent) }}%）</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="panel-section">
           <p class="section-label">当前状态</p>
           <div class="status-line">
@@ -72,6 +199,33 @@
             <li>拖拽画布可移动视图，拖拽节点可微调位置</li>
             <li>右下角可缩放族谱视图</li>
           </ul>
+        </section>
+
+        <section class="panel-section" v-if="hasData">
+          <p class="section-label">视图筛选</p>
+          <div class="filter-row">
+            <button
+              v-for="opt in [
+                { value: 'all', label: '全部' },
+                { value: 'paternal', label: '仅父系' },
+                { value: 'maternal', label: '仅母系' },
+                { value: 'branch', label: '某人分支' }
+              ]"
+              :key="opt.value"
+              :class="['chip', { active: lineFilter === opt.value }]"
+              :disabled="opt.value === 'branch' && !focusedNodeId"
+              @click="setLineFilter(opt.value)"
+            >{{ opt.label }}</button>
+          </div>
+          <p class="hint-mini" v-if="lineFilter === 'branch' && focusedNodeId">
+            当前分支：<strong>{{ focusNodeName }}</strong>
+          </p>
+          <p class="hint-mini" v-else-if="lineFilter === 'branch'">
+            请先点击某节点以选定分支
+          </p>
+          <p class="hint-mini" v-else>
+            点击节点可高亮祖先 / 子孙 / 配偶
+          </p>
         </section>
 
         <section class="panel-section query-panel" v-if="hasData">
@@ -130,6 +284,7 @@
           </p>
           <div class="upload-actions">
             <button class="btn btn-primary large" @click="triggerFileUpload">选择文档</button>
+            <button class="btn btn-plain large" @click="triggerGedcomUpload">导入 .ged 文件</button>
             <button class="btn btn-plain large" @click="showSettings = true">配置分析密钥</button>
           </div>
           <div class="format-row">
@@ -137,6 +292,7 @@
             <span>PDF</span>
             <span>DOC</span>
             <span>DOCX</span>
+            <span>GED</span>
           </div>
         </div>
 
@@ -150,7 +306,10 @@
           </div>
         </div>
 
-        <div v-if="hasData && !showUpload" class="canvas-container" ref="canvasContainer">
+        <div v-if="hasData && !showUpload" class="canvas-container" ref="canvasContainer"
+             @dragover="onCanvasDragOver"
+             @dragleave="onCanvasDragLeave"
+             @drop="handleDrop">
           <div class="zodiac-watermark" aria-hidden="true">鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪 鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪</div>
           <div class="scroll-title">
             <span></span>
@@ -158,7 +317,15 @@
             <span></span>
           </div>
 
-          <svg ref="svgCanvas" class="genealogy-canvas" @mousedown="startCanvasDrag" role="img" aria-label="族谱世系图画布">
+          <svg
+            ref="svgCanvas"
+            class="genealogy-canvas"
+            @mousedown="startCanvasDrag"
+            @click.self="onCanvasClick"
+            @wheel.prevent="onWheelZoom"
+            role="img"
+            aria-label="族谱世系图画布"
+          >
             <defs>
               <marker
                 id="arrowhead"
@@ -172,20 +339,31 @@
               </marker>
             </defs>
             <g ref="svgGroup">
-              <g v-for="link in links" :key="link.id">
+              <g v-for="link in filteredVisibleLinks" :key="link.id">
                 <path
                   :d="link.relation === 'husband-wife' ? getSpouseLinkPath(link) : getLinkPath(link)"
-                  :class="['link', { spouse: link.relation === 'husband-wife', highlight: highlightedLinks.includes(link.id) }]"
+                  :class="['link', {
+                    spouse: link.relation === 'husband-wife',
+                    highlight: highlightedLinks.includes(link.id),
+                    dimmed: focusedBranchLinkIds && !focusedBranchLinkIds.has(link.id)
+                  }]"
                   :marker-end="link.relation === 'husband-wife' ? '' : 'url(#arrowhead)'"
                 />
               </g>
               <g
-                v-for="node in nodes"
+                v-for="node in filteredVisibleNodes"
                 :key="node.id"
                 class="node"
+                :class="{
+                  focused: focusedNodeId === node.id,
+                  dimmed: focusedBranchIds && !focusedBranchIds.has(node.id),
+                  pulse: pulsingNodeId === node.id
+                }"
                 :transform="`translate(${node.x}, ${node.y})`"
                 @mousedown.stop="startNodeDrag(node, $event)"
-                @dblclick="editNode(node)"
+                @click.stop="focusOnNode(node)"
+                @dblclick.stop="toggleCollapse(node)"
+                @contextmenu.stop="openContextMenu(node, $event)"
               >
                 <circle r="38" :class="[node.gender, { highlight: highlightedNodes.includes(node.id) }]" />
                 <text class="generation-text" dy="-14">{{ node.generation }}世</text>
@@ -193,6 +371,11 @@
                   {{ node.name.length > 4 ? node.name.slice(0, 4) + '…' : node.name }}
                 </text>
                 <title>{{ node.name }}（{{ node.gender === 'female' ? '女' : '男' }}，{{ node.generation }}世）</title>
+                <g v-if="countDescendants(node.id) > 0" class="collapse-badge" :class="{ collapsed: node.collapsed }" @click.stop="toggleCollapse(node)">
+                  <circle r="11" />
+                  <text dy="4">{{ node.collapsed ? '+' : '−' }}</text>
+                  <title>{{ node.collapsed ? '展开 ' + countDescendants(node.id) + ' 个后代' : '折叠 ' + countDescendants(node.id) + ' 个后代' }}</title>
+                </g>
               </g>
             </g>
           </svg>
@@ -202,6 +385,57 @@
             <span aria-live="polite">{{ Math.round(zoom * 100) }}%</span>
             <button @click="zoomIn" aria-label="放大" title="放大 (+)">+</button>
             <button @click="resetZoom" aria-label="重置缩放" title="重置 (0)">重置</button>
+          </div>
+
+          <!-- 图谱小地图：缩略图 + 当前视口框，支持拖拽 / 点击导航 -->
+          <div
+            v-if="hasData && nodes.length > 0"
+            class="minimap"
+            ref="minimapEl"
+            role="region"
+            aria-label="图谱小地图"
+            @mousedown.stop="onMinimapMouseDown"
+            @click.stop
+          >
+            <svg :viewBox="`0 0 ${minimapSize} ${minimapSize}`" preserveAspectRatio="xMidYMid meet" class="minimap-svg">
+              <!-- 节点缩略 -->
+              <g
+                v-for="node in nodes"
+                :key="'mm-' + node.id"
+                :transform="`translate(${minimapXOf(node.x)}, ${minimapYOf(node.y)})`"
+              >
+                <circle r="3" :class="node.gender" />
+              </g>
+              <!-- 关系缩略 -->
+              <line
+                v-for="link in minimapLinks"
+                :key="'mml-' + link.id"
+                :x1="minimapXOf(link.x1)"
+                :y1="minimapYOf(link.y1)"
+                :x2="minimapXOf(link.x2)"
+                :y2="minimapYOf(link.y2)"
+                class="minimap-link"
+                :class="{ spouse: link.spouse }"
+              />
+              <!-- 当前视口框 -->
+              <rect
+                :x="viewportRect.x"
+                :y="viewportRect.y"
+                :width="viewportRect.w"
+                :height="viewportRect.h"
+                class="minimap-viewport"
+              />
+            </svg>
+            <div class="minimap-label">缩略图</div>
+          </div>
+
+          <!-- 拖拽文件到画布时的提示遮罩 -->
+          <div v-if="isDragOverCanvas" class="canvas-dropzone" aria-hidden="true">
+            <div class="canvas-dropzone-inner">
+              <div class="dropzone-icon">⇪</div>
+              <p>拖入文件以替换当前族谱</p>
+              <small>支持 TXT / PDF / DOC / DOCX</small>
+            </div>
           </div>
         </div>
       </section>
@@ -217,14 +451,29 @@
           <button class="modal-close" @click="closeSettings" aria-label="关闭">×</button>
         </div>
         <div class="form-group">
-          <label class="form-label">分析密钥</label>
+          <label class="form-label" for="api-key-input">分析密钥</label>
           <input
+            id="api-key-input"
             v-model="userApiKey"
             type="password"
             class="form-input"
             placeholder="粘贴你的 API Key"
           />
           <small class="form-hint">密钥仅保存在你的浏览器中，不会上传到任何服务器。</small>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="force-mode-select">调用模式</label>
+          <select
+            id="force-mode-select"
+            class="form-select"
+            :value="forceMode"
+            @change="(e) => setForceMode(e.target.value)"
+          >
+            <option value="auto">自动：阿里云优先，失败时自动切本地</option>
+            <option value="cloud">强制云端：仅用阿里云百炼</option>
+            <option value="local">强制本地：仅用本地 Ollama</option>
+          </select>
+          <small class="form-hint">调试或对比效果时可手动指定；选择会自动保存到本地。</small>
         </div>
         <div class="settings-info">
           <h4>如何获取密钥</h4>
@@ -288,22 +537,99 @@
         </div>
       </div>
     </div>
+
+    <!-- 搜索人物弹窗 -->
+    <div v-if="showSearchModal" class="modal" @click.self="closeSearch" role="dialog" aria-modal="true" aria-label="搜索人物">
+      <div class="modal-content search-modal">
+        <div class="modal-header">
+          <h3>搜索人物</h3>
+          <button class="modal-close" @click="closeSearch" aria-label="关闭">×</button>
+        </div>
+        <input
+          ref="searchInputRef"
+          v-model="searchQuery"
+          class="form-input search-input"
+          placeholder="输入姓名（模糊匹配）"
+          @keydown.esc="closeSearch"
+          @keydown.enter="searchResults.length && selectSearchResult(searchResults[0])"
+        />
+        <div class="search-results" role="listbox">
+          <div v-if="searchResults.length === 0" class="search-empty">无匹配结果</div>
+          <button
+            v-for="r in searchResults.slice(0, 50)"
+            :key="r.id"
+            class="search-item"
+            @click="selectSearchResult(r)"
+          >
+            <span class="search-item-name">{{ r.name }}</span>
+            <span class="search-item-meta">{{ r.generation }}世 · {{ r.gender === 'female' ? '女' : '男' }}</span>
+          </button>
+          <div v-if="searchResults.length > 50" class="search-more">还有 {{ searchResults.length - 50 }} 个结果，请缩小关键词</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 快捷键帮助弹窗 -->
+    <div v-if="showHelpModal" class="modal" @click.self="closeHelp" role="dialog" aria-modal="true" aria-label="快捷键帮助">
+      <div class="modal-content compact">
+        <div class="modal-header">
+          <h3>快捷键</h3>
+          <button class="modal-close" @click="closeHelp" aria-label="关闭">×</button>
+        </div>
+        <ul class="help-list">
+          <li><kbd>Ctrl</kbd> + <kbd>K</kbd> · 打开人物搜索</li>
+          <li><kbd>F</kbd> · 打开人物搜索（同 Ctrl+K）</li>
+          <li><kbd>+</kbd> / <kbd>-</kbd> · 放大 / 缩小</li>
+          <li><kbd>0</kbd> · 重置视图（缩放 + 平移）</li>
+          <li><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Y</kbd> · 撤销 / 重做</li>
+          <li><kbd>Delete</kbd> · 删除选中的节点（聚焦后）</li>
+          <li><kbd>Esc</kbd> · 关闭弹窗 / 取消焦点</li>
+          <li><kbd>?</kbd> · 显示本帮助</li>
+        </ul>
+        <p class="help-tip">双击节点可折叠 / 展开其后代；右键节点可编辑、添加子女 / 配偶 / 父母、删除。</p>
+      </div>
+    </div>
+
+    <!-- 右键菜单 -->
+    <div
+      v-if="contextMenu.show"
+      class="context-menu"
+      :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+      role="menu"
+      @click.stop
+    >
+      <div class="context-menu-header">{{ contextMenu.node && contextMenu.node.name }}</div>
+      <button class="context-item" @click="contextEditNode">编辑…</button>
+      <div class="context-divider"></div>
+      <button class="context-item" @click="contextAddChild('male')">添加儿子</button>
+      <button class="context-item" @click="contextAddChild('female')">添加女儿</button>
+      <button class="context-item" @click="contextAddSpouse">添加配偶</button>
+      <div class="context-divider"></div>
+      <button class="context-item" @click="contextAddParent('father')">添加父亲</button>
+      <button class="context-item" @click="contextAddParent('mother')">添加母亲</button>
+      <div class="context-divider"></div>
+      <button class="context-item" @click="setAsRootNode">设为根</button>
+      <button class="context-item danger" @click="contextDeleteNode">删除</button>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import html2canvas from 'html2canvas'
 
 const fileInput = ref(null)
+const gedcomInput = ref(null)
 const mainContent = ref(null)
 const svgCanvas = ref(null)
 const svgGroup = ref(null)
 const canvasContainer = ref(null)
+const minimapEl = ref(null)
 
 const nodes = ref([])
 const links = ref([])
 const isLoading = ref(false)
+const isDragOverCanvas = ref(false)
 const loadingMessage = ref('正在分析文档...')
 const showUpload = ref(true)
 const hasError = ref(false)
@@ -323,10 +649,92 @@ const highlightedNodes = ref([])
 const highlightedLinks = ref([])
 
 const hasData = computed(() => nodes.value.length > 0)
+
+// ============ 统计图表 ============
+// 代际分布 + 性别比例，所有数据都从 nodes 派生
+const generationStats = computed(() => {
+  if (nodes.value.length === 0) return []
+  const counts = new Map()
+  for (const n of nodes.value) {
+    const g = n.generation || 1
+    counts.set(g, (counts.get(g) || 0) + 1)
+  }
+  const arr = Array.from(counts.entries())
+    .map(([gen, count]) => ({ gen, count }))
+    .sort((a, b) => a.gen - b.gen)
+  const max = Math.max(...arr.map(i => i.count), 1)
+  // 留 10% 顶部空白，柱体最大占 80px
+  return arr.map(item => ({
+    ...item,
+    height: Math.round((item.count / max) * 80) + 4
+  }))
+})
+const totalMembers = computed(() => nodes.value.length)
+const maxGen = computed(() => {
+  if (generationStats.value.length === 0) return 0
+  return generationStats.value.reduce((m, i) => (i.count > m.count ? i : m)).gen
+})
+// 单柱宽度 = (画布宽 198 - 起始 22) / 代际数，至少 8px
+const generationBarWidth = computed(() => {
+  const n = generationStats.value.length || 1
+  return Math.max(8, Math.floor(176 / n))
+})
+const genderStats = computed(() => {
+  let male = 0
+  let female = 0
+  for (const n of nodes.value) {
+    if (n.gender === 'female') female += 1
+    else male += 1
+  }
+  const total = male + female
+  return {
+    male,
+    female,
+    malePercent: total === 0 ? 0 : (male / total) * 100,
+    femalePercent: total === 0 ? 0 : (female / total) * 100
+  }
+})
+const circumference = computed(() => 2 * Math.PI * 24)
+const maleDash = computed(() => {
+  return (genderStats.value.malePercent / 100) * circumference.value
+})
 const API_BASE_URL = '/api'
 const apiKey = ref(localStorage.getItem('genealogy_api_key') || '')
 const userApiKey = ref(apiKey.value)
 const showSettings = ref(false)
+// 调用模式：auto（自动主备切换）/ cloud（强制云端）/ local（强制本地）
+const VALID_FORCE_MODES = ['auto', 'cloud', 'local']
+const forceMode = ref(localStorage.getItem('genealogy_force_mode') || 'auto')
+// 最近一次分析的服务来源信息
+const aiProviderInfo = ref(null)
+// 焦点节点 id：null 表示未聚焦；点击节点切换焦点；点击空白处或再次点击同一节点取消
+const focusedNodeId = ref(null)
+// 主题：light / dark
+const theme = ref(localStorage.getItem('genealogy_theme') || 'light')
+// 搜索
+const showSearchModal = ref(false)
+const searchQuery = ref('')
+const searchInputRef = ref(null)
+// 帮助弹窗
+const showHelpModal = ref(false)
+// 右键菜单
+const contextMenu = ref({ show: false, x: 0, y: 0, node: null })
+
+// MySQL 会话管理
+const sessions = ref([])
+const currentSessionId = ref(null)
+const currentSessionName = ref('')
+const isSaving = ref(false)
+const lastSavedAt = ref(null)
+const autoSaveEnabled = ref(localStorage.getItem('genealogy_autosave') !== 'false')
+const sessionNameInput = ref('')
+const editingSessionId = ref(null)
+const sessionNameInputRef = ref(null)
+// 会话重命名时的原始名称，用于 ESC 取消恢复
+let renameSessionOriginalName = ''
+
+// 主题初始化（应用 data-theme 到 <html>）
+applyTheme()
 
 let isDragging = false
 let isNodeDragging = false
@@ -350,8 +758,9 @@ const displayStatus = computed(() => {
   if (operationMessage.value) return operationMessage.value
   if (hasError.value) return statusText.value
   if (isLoading.value) return '正在分析中...'
+  if (sessions.value.length > 0 && !currentSessionId.value && !hasData.value) return '请选择一个族谱会话或新建会话'
   if (!apiKey.value) return '请先配置分析密钥，然后上传文档'
-  if (hasData.value) return '族谱已生成，双击节点可编辑'
+  if (hasData.value) return currentSessionName.value ? `「${currentSessionName.value}」已生成` : '族谱已生成，双击节点可编辑'
   return '密钥已就绪，上传文档即可生成族谱'
 })
 
@@ -422,6 +831,33 @@ const clearApiKey = () => {
   setTimeout(() => { operationMessage.value = '' }, 3000)
 }
 
+// 切换调用模式，并持久化到本地
+const setForceMode = (mode) => {
+  if (!VALID_FORCE_MODES.includes(mode)) return
+  forceMode.value = mode
+  localStorage.setItem('genealogy_force_mode', mode)
+}
+
+// 把最近一次 AI 调用结果转换成用于顶栏徽章展示的文本与样式
+const providerBadge = computed(() => {
+  const info = aiProviderInfo.value
+  if (!info || !info.provider) return null
+  if (info.forced === 'cloud') {
+    return { text: '阿里云百炼（强制）', tone: 'cloud' }
+  }
+  if (info.forced === 'local') {
+    return { text: '本地 Ollama（强制）', tone: 'local' }
+  }
+  if (info.fallback) {
+    return {
+      text: `本地 Ollama（兜底 · 阿里云异常）`,
+      tone: 'fallback',
+      hint: info.primaryError
+    }
+  }
+  return { text: `阿里云百炼`, tone: 'cloud' }
+})
+
 // 关闭设置弹窗，并恢复输入框中的当前密钥值。
 const closeSettings = () => {
   showSettings.value = false
@@ -431,6 +867,19 @@ const closeSettings = () => {
 // 打开隐藏的文件选择框，触发文档上传流程。
 const triggerFileUpload = () => {
   fileInput.value?.click()
+}
+const triggerGedcomUpload = () => {
+  gedcomInput.value?.click()
+}
+
+// 处理 GEDCOM 导入：读 .ged 文本 -> 走 importGedcomFromText
+const handleGedcomUpload = async (event) => {
+  const file = event.target.files?.[0]
+  // 关键：清空 value，否则下次选同一文件不触发 change
+  event.target.value = ''
+  if (!file) return
+  const text = await file.text()
+  await importGedcomFromText(file.name, text)
 }
 
 // 处理文件选择框上传的单个文档。
@@ -445,10 +894,61 @@ const handleFileUpload = async (event) => {
 // 处理拖拽到上传区域的单个文档。
 const handleDrop = async (event) => {
   event.preventDefault()
+  isDragOverCanvas.value = false
   const file = event.dataTransfer.files?.[0]
-  if (file) {
+  if (!file) return
+  if (file.name.toLowerCase().endsWith('.ged')) {
+    await importGedcomFromText(file.name, await file.text())
+  } else {
     await analyzeDocument(file)
   }
+}
+
+// 共用的 GEDCOM 导入核心逻辑：上传页面 / 画布 / 拖拽 都走这里
+const importGedcomFromText = async (filename, text) => {
+  isLoading.value = true
+  hasError.value = false
+  showUpload.value = false
+  loadingMessage.value = '正在解析 GEDCOM 文件...'
+  try {
+    const resp = await fetch('/api/import/gedcom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text, filename })
+    })
+    const json = await resp.json()
+    if (!json.success) {
+      throw new Error(json.error?.message || 'GEDCOM 导入失败')
+    }
+    const { members, relationships } = json.data
+    if (!members || members.length === 0) {
+      throw new Error('GEDCOM 中未找到成员记录')
+    }
+    currentSessionName.value = (filename || 'GEDCOM').replace(/\.ged$/i, '')
+    await buildGenealogyData(members, relationships)
+    statusText.value = `已从 ${filename} 导入，共 ${members.length} 人`
+  } catch (err) {
+    hasError.value = true
+    statusText.value = '导入失败：' + (err.message || '未知错误')
+    showUpload.value = true
+  } finally {
+    isLoading.value = false
+  }
+}
+
+// 画布上的拖拽需要：dragover preventDefault（才能 drop），
+// dragenter/dragleave 维护视觉态，drop 复用 handleDrop
+const onCanvasDragOver = (event) => {
+  event.preventDefault()
+  // 必须设置 dropEffect 才能在某些浏览器触发 drop
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  isDragOverCanvas.value = true
+}
+const onCanvasDragLeave = (event) => {
+  // 仅当真正离开容器时清掉（relatedTarget 不在容器内）
+  if (event.currentTarget && event.relatedTarget &&
+      event.currentTarget.contains(event.relatedTarget)) return
+  isDragOverCanvas.value = false
 }
 
 // 根据文档类型选择前端读取或后端解析，并把结果交给族谱绘制逻辑。
@@ -475,7 +975,7 @@ const analyzeDocument = async (file) => {
       const headers = {}
       if (apiKey.value) headers['X-API-Key'] = apiKey.value
 
-      const response = await fetch(`${API_BASE_URL}/upload`, {
+      const response = await fetch(`${API_BASE_URL}/upload?force=${forceMode.value}`, {
         method: 'POST',
         headers,
         body: formData
@@ -486,6 +986,12 @@ const analyzeDocument = async (file) => {
       const result = await response.json()
       if (!result.success) throw new Error(result.error?.message || '无法从文档中提取族谱信息')
 
+      aiProviderInfo.value = {
+        provider: result.data?.provider,
+        fallback: result.data?.fallback,
+        forced: result.data?.forced,
+        primaryError: result.data?.primaryError
+      }
       buildGenealogyData(result.data.members, result.data.relationships)
       return
     }
@@ -494,7 +1000,7 @@ const analyzeDocument = async (file) => {
     const headers = { 'Content-Type': 'application/json' }
     if (apiKey.value) headers['X-API-Key'] = apiKey.value
 
-    const response = await fetch(`${API_BASE_URL}/analyze`, {
+    const response = await fetch(`${API_BASE_URL}/analyze?force=${forceMode.value}`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ content, filename: file.name })
@@ -505,11 +1011,22 @@ const analyzeDocument = async (file) => {
     const result = await response.json()
     if (!result.success) throw new Error(result.error?.message || '未能从文档内容中识别出族谱信息，请检查文档是否包含家族成员和关系描述')
 
+    aiProviderInfo.value = {
+      provider: result.data?.provider,
+      fallback: result.data?.fallback,
+      forced: result.data?.forced,
+      primaryError: result.data?.primaryError
+    }
     buildGenealogyData(result.data.members, result.data.relationships)
   } catch (error) {
     console.error('分析失败:', error)
     hasError.value = true
-    statusText.value = error.message
+    // fetch 失败（TypeError: Failed to fetch）通常是后端没启动 / 代理不通
+    if (error instanceof TypeError && /fetch/i.test(error.message)) {
+      statusText.value = '无法连接后端服务，请确认 backend 已在端口 3100 启动（node server.js）'
+    } else {
+      statusText.value = error.message
+    }
     showUpload.value = true
   } finally {
     isLoading.value = false
@@ -517,8 +1034,14 @@ const analyzeDocument = async (file) => {
 }
 
 // 把 AI 返回的成员和关系数据转换成画布节点与连线。
-const buildGenealogyData = (members, relationships) => {
-  const nodeMap = new Map()
+// 兼容三种数据来源：
+//   - AI 文本分析：relationships[].person1/person2 指向 member.name
+//   - GEDCOM 导入 ：relationships[].source_id/target_id 指向 member.id
+//   - 数据库加载 ：relationships[].source/target 可能是 id 或 name
+// 优先按 id 查，回退到按 name 查，保证所有数据源都能正常连线。
+const buildGenealogyData = async (members, relationships) => {
+  const nodeById = new Map()
+  const nodeByName = new Map()
 
   nodes.value = members.map((member, index) => {
     const id = member.id || `node_${index}`
@@ -528,20 +1051,36 @@ const buildGenealogyData = (members, relationships) => {
       gender: member.gender === 'female' ? 'female' : 'male',
       generation: member.generation || 1,
       x: 0,
-      y: 0
+      y: 0,
+      collapsed: false
     }
-    nodeMap.set(member.name, node)
+    nodeById.set(id, node)
+    if (member.name) nodeByName.set(member.name, node)
     return node
   })
 
+  const findNode = (key) => {
+    if (key == null) return null
+    if (nodeById.has(key)) return nodeById.get(key)
+    if (nodeByName.has(key)) return nodeByName.get(key)
+    // GEDCOM 解析会保留 @I1@ 这种原始 xref，作为最后一道兜底
+    if (typeof key === 'string' && key.startsWith('@')) {
+      const m = members.find(mb => mb.id === key || mb.gedcomXref === key)
+      if (m) return nodeById.get(m.id)
+    }
+    return null
+  }
+
   links.value = relationships
     .map((rel, index) => {
-      const sourceNode = nodeMap.get(rel.person1)
-      const targetNode = nodeMap.get(rel.person2)
+      const sourceKey = rel.source_id || rel.source || rel.person1
+      const targetKey = rel.target_id || rel.target || rel.person2
+      const sourceNode = findNode(sourceKey)
+      const targetNode = findNode(targetKey)
       if (!sourceNode || !targetNode) return null
 
       return {
-        id: `link_${index}`,
+        id: rel.id || `link_${index}`,
         source: sourceNode,
         target: targetNode,
         relation: rel.relation
@@ -552,9 +1091,448 @@ const buildGenealogyData = (members, relationships) => {
   applyTreeLayout()
   pushHistory()
   statusText.value = '分析完成，可双击节点编辑'
+
+  // 如果当前没有绑定会话，自动创建一个新会话并保存
+  if (!currentSessionId.value) {
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '未命名族谱' })
+      })
+      const json = await res.json()
+      if (json.success) {
+        currentSessionId.value = json.data.id
+        currentSessionName.value = json.data.name || '未命名族谱'
+        await saveCurrentSession()
+        await fetchSessions()
+      }
+    } catch (err) {
+      console.error('自动创建会话失败:', err)
+    }
+  } else {
+    // 已有会话时立即自动保存一次
+    scheduleAutoSave()
+  }
 }
 
 // 按代际对成员进行基础树状排布，生成初始坐标。
+// 收集指定节点的所有直系后代 id
+const collectDescendants = (nodeId, set) => {
+  for (const link of links.value) {
+    if (link.relation === 'husband-wife') continue
+    const sourceId = link.source.id
+    const targetId = link.target.id
+    if (sourceId === nodeId && !set.has(targetId)) {
+      set.add(targetId)
+      collectDescendants(targetId, set)
+    }
+  }
+}
+
+// 计算某节点下需要隐藏的后代总数
+const countDescendants = (nodeId) => {
+  const set = new Set()
+  collectDescendants(nodeId, set)
+  return set.size
+}
+
+// 当前被折叠的祖先节点集合
+const collapsedAncestors = computed(() => nodes.value.filter(n => n.collapsed))
+
+// 由于祖先折叠而需要隐藏的节点 id 集合
+const hiddenNodeIds = computed(() => {
+  const hidden = new Set()
+  for (const collapsed of collapsedAncestors.value) {
+    collectDescendants(collapsed.id, hidden)
+  }
+  return hidden
+})
+
+// 实际渲染的节点 / 边（过滤掉被折叠的子树）
+const visibleNodes = computed(() => nodes.value.filter(n => !hiddenNodeIds.value.has(n.id)))
+const visibleLinks = computed(() => links.value.filter(l => {
+  if (hiddenNodeIds.value.has(l.source.id)) return false
+  if (hiddenNodeIds.value.has(l.target.id)) return false
+  return true
+}))
+
+// 切换节点折叠/展开状态
+const toggleCollapse = (node) => {
+  const target = nodes.value.find(n => n.id === node.id)
+  if (!target) return
+  // 没有后代的叶子节点不响应双击（避免误折叠）
+  if (countDescendants(node.id) === 0) return
+  target.collapsed = !target.collapsed
+  pushHistory()
+}
+
+// 收集节点的祖先链（含自己）
+const collectAncestors = (nodeId, set) => {
+  if (set.has(nodeId)) return
+  set.add(nodeId)
+  for (const link of links.value) {
+    if (link.relation === 'husband-wife') continue
+    // 子→父 关系中，target 是子，source 是父
+    if (link.target.id === nodeId && !set.has(link.source.id)) {
+      collectAncestors(link.source.id, set)
+    }
+  }
+}
+
+// 收集节点的配偶 id
+const collectSpouses = (nodeId, set) => {
+  for (const link of links.value) {
+    if (link.relation !== 'husband-wife') continue
+    if (link.source.id === nodeId) set.add(link.target.id)
+    else if (link.target.id === nodeId) set.add(link.source.id)
+  }
+}
+
+// 当前焦点节点 + 配偶 + 祖先 + 后代（构成完整"分支"）
+const focusedBranchIds = computed(() => {
+  if (!focusedNodeId.value) return null
+  const set = new Set()
+  collectAncestors(focusedNodeId.value, set)
+  collectDescendants(focusedNodeId.value, set)
+  collectSpouses(focusedNodeId.value, set)
+  return set
+})
+
+// 焦点分支内的边（用于高亮）
+const focusedBranchLinkIds = computed(() => {
+  if (!focusedBranchIds.value) return null
+  const set = new Set()
+  for (const link of links.value) {
+    if (focusedBranchIds.value.has(link.source.id) && focusedBranchIds.value.has(link.target.id)) {
+      set.add(link.id)
+    }
+  }
+  return set
+})
+
+// 点击节点：切换焦点
+const focusOnNode = (node) => {
+  if (focusedNodeId.value === node.id) {
+    focusedNodeId.value = null
+  } else {
+    focusedNodeId.value = node.id
+  }
+}
+
+// 点击画布空白处：取消焦点 + 取消查询高亮
+const onCanvasClick = () => {
+  focusedNodeId.value = null
+  highlightedNodes.value = []
+  highlightedLinks.value = []
+}
+
+// 主题切换
+const toggleTheme = () => {
+  theme.value = theme.value === 'dark' ? 'light' : 'dark'
+  localStorage.setItem('genealogy_theme', theme.value)
+}
+
+// 应用主题到根元素
+const applyTheme = () => {
+  if (typeof document !== 'undefined') {
+    document.documentElement.setAttribute('data-theme', theme.value)
+  }
+}
+
+// 打开搜索
+const openSearch = () => {
+  if (!hasData.value) return
+  showSearchModal.value = true
+  searchQuery.value = ''
+  // 自动聚焦输入框
+  nextTick(() => {
+    searchInputRef.value && searchInputRef.value.focus()
+  })
+}
+
+const closeSearch = () => {
+  showSearchModal.value = false
+}
+
+// 搜索结果：按姓名模糊匹配，按代际 + 姓名排序
+const searchResults = computed(() => {
+  const q = searchQuery.value.trim()
+  if (!q) return nodes.value.slice().sort((a, b) => a.generation - b.generation || a.name.localeCompare(b.name, 'zh'))
+  return nodes.value
+    .filter(n => n.name && n.name.includes(q))
+    .sort((a, b) => a.generation - b.generation || a.name.localeCompare(b.name, 'zh'))
+})
+
+// 选中搜索结果：聚焦 + 居中 + 闪烁
+const selectSearchResult = (node) => {
+  if (!node) return
+  focusedNodeId.value = node.id
+  // 居中该节点
+  centerOnNode(node)
+  // 闪烁 1.5s
+  pulsingNodeId.value = node.id
+  setTimeout(() => {
+    pulsingNodeId.value = null
+  }, 1600)
+  closeSearch()
+}
+
+// 居中到指定节点
+const centerOnNode = (node) => {
+  if (!svgCanvas.value) return
+  const rect = svgCanvas.value.getBoundingClientRect()
+  // 把节点的世界坐标 (node.x, node.y) 投影到屏幕中心
+  // 屏幕坐标 = cx + node.x * zoom，cx = rect.width / 2 + panX
+  // 要使屏幕坐标 = (rect.width / 2, rect.height / 2)
+  // → rect.width/2 + panX + node.x * zoom = rect.width/2 → panX = -node.x * zoom
+  panX.value = -node.x * zoom.value
+  panY.value = -node.y * zoom.value
+  updateTransform()
+}
+
+// 闪烁高亮的节点 id
+const pulsingNodeId = ref(null)
+
+// 视图筛选：all / paternal / maternal / branch（branch 用 focusedBranchIds）
+const lineFilter = ref('all')
+
+// 仅显示沿某 line 边（father / mother）从根可达的子代 + 根的配偶 + 一层 spouse
+function getLineVisible(line) {
+  if (nodes.value.length === 0) return new Set()
+  const minGen = Math.min(...nodes.value.map(n => n.generation || 1))
+  // 起点 = 所有最小代际的节点（通常是 gen=1 的根）
+  const start = new Set(nodes.value.filter(n => (n.generation || 1) === minGen).map(n => n.id))
+  // 起点配偶也作为起点
+  let added = true
+  while (added) {
+    added = false
+    for (const link of links.value) {
+      if (link.relation !== 'husband-wife') continue
+      if (start.has(link.source.id) && !start.has(link.target.id)) { start.add(link.target.id); added = true }
+      else if (start.has(link.target.id) && !start.has(link.source.id)) { start.add(link.source.id); added = true }
+    }
+  }
+  // BFS 沿 line-* 边向子代走
+  const visible = new Set(start)
+  const queue = [...start]
+  while (queue.length) {
+    const id = queue.shift()
+    for (const link of links.value) {
+      if (link.relation === 'husband-wife') continue
+      if (!link.relation.startsWith(line + '-')) continue
+      if (link.source.id === id && !visible.has(link.target.id)) {
+        visible.add(link.target.id)
+        queue.push(link.target.id)
+      }
+    }
+  }
+  // 加 visible 节点的一层配偶（保持配偶一致性，但不沿配偶向下延伸）
+  const toAdd = new Set()
+  for (const link of links.value) {
+    if (link.relation !== 'husband-wife') continue
+    if (visible.has(link.source.id)) toAdd.add(link.target.id)
+    if (visible.has(link.target.id)) toAdd.add(link.source.id)
+  }
+  for (const id of toAdd) visible.add(id)
+  return visible
+}
+
+// 筛选后需要隐藏的节点 id 集合
+const filterHiddenNodeIds = computed(() => {
+  if (lineFilter.value === 'all') return new Set()
+  if (lineFilter.value === 'branch') {
+    if (!focusedNodeId.value || !focusedBranchIds.value) return new Set()
+    return new Set(nodes.value.map(n => n.id).filter(id => !focusedBranchIds.value.has(id)))
+  }
+  if (lineFilter.value === 'paternal') {
+    const visible = getLineVisible('father')
+    return new Set(nodes.value.map(n => n.id).filter(id => !visible.has(id)))
+  }
+  if (lineFilter.value === 'maternal') {
+    const visible = getLineVisible('mother')
+    return new Set(nodes.value.map(n => n.id).filter(id => !visible.has(id)))
+  }
+  return new Set()
+})
+
+// 综合隐藏：折叠的子孙 + 筛选掉的节点
+const combinedHiddenNodeIds = computed(() => {
+  const set = new Set(hiddenNodeIds.value)
+  for (const id of filterHiddenNodeIds.value) set.add(id)
+  return set
+})
+
+// 实际渲染的节点 / 边（综合过滤）
+const filteredVisibleNodes = computed(() => nodes.value.filter(n => !combinedHiddenNodeIds.value.has(n.id)))
+const filteredVisibleLinks = computed(() => links.value.filter(l => {
+  if (combinedHiddenNodeIds.value.has(l.source.id)) return false
+  if (combinedHiddenNodeIds.value.has(l.target.id)) return false
+  return true
+}))
+
+// 切换筛选模式
+const setLineFilter = (mode) => {
+  lineFilter.value = mode
+  if (mode === 'branch' && !focusedNodeId.value) {
+    // 切到 branch 但没选人，自动回到 all
+    lineFilter.value = 'all'
+  }
+}
+
+// 当前焦点节点的名字（用于显示）
+const focusNodeName = computed(() => {
+  if (!focusedNodeId.value) return ''
+  const n = nodes.value.find(x => x.id === focusedNodeId.value)
+  return n ? n.name : ''
+})
+
+// 帮助弹窗
+const showHelp = () => {
+  showHelpModal.value = true
+}
+const closeHelp = () => {
+  showHelpModal.value = false
+}
+
+// 打开右键菜单
+const openContextMenu = (node, e) => {
+  if (e && e.preventDefault) e.preventDefault()
+  const menuWidth = 180
+  const menuHeight = 320
+  let x = e.clientX
+  let y = e.clientY
+  if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth - 8
+  if (y + menuHeight > window.innerHeight) y = window.innerHeight - menuHeight - 8
+  contextMenu.value = { show: true, x, y, node }
+}
+
+const closeContextMenu = () => {
+  contextMenu.value.show = false
+  contextMenu.value.node = null
+}
+
+// 右键菜单：编辑
+const contextEditNode = () => {
+  const node = contextMenu.value.node
+  closeContextMenu()
+  if (node) editNode(node)
+}
+
+// 生成新节点 id
+const newNodeId = (prefix = 'node') => `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}`
+
+// 右键菜单：添加子女（性别 = male/female）
+const contextAddChild = (gender) => {
+  const node = contextMenu.value.node
+  closeContextMenu()
+  if (!node) return
+  pushHistory()
+  const id = newNodeId('node')
+  // 父→子 关系类型：父是 node，母的话反过来
+  let parentRel
+  if (node.gender === 'female') {
+    parentRel = gender === 'male' ? 'mother-son' : 'mother-daughter'
+  } else {
+    parentRel = gender === 'male' ? 'father-son' : 'father-daughter'
+  }
+  const newNode = {
+    id,
+    name: '新成员',
+    gender,
+    generation: (node.generation || 1) + 1,
+    x: node.x + 80,
+    y: node.y + 120,
+    collapsed: false
+  }
+  nodes.value.push(newNode)
+  links.value.push({
+    id: newNodeId('link'),
+    source: node,
+    target: newNode,
+    relation: parentRel
+  })
+}
+
+// 右键菜单：添加配偶
+const contextAddSpouse = () => {
+  const node = contextMenu.value.node
+  closeContextMenu()
+  if (!node) return
+  pushHistory()
+  const id = newNodeId('node')
+  const newNode = {
+    id,
+    name: '新配偶',
+    gender: node.gender === 'female' ? 'male' : 'female',
+    generation: node.generation || 1,
+    x: node.x + 100,
+    y: node.y,
+    collapsed: false
+  }
+  nodes.value.push(newNode)
+  links.value.push({
+    id: newNodeId('link'),
+    source: node,
+    target: newNode,
+    relation: 'husband-wife'
+  })
+}
+
+// 右键菜单：添加父亲 / 母亲
+const contextAddParent = (which) => {
+  const node = contextMenu.value.node
+  closeContextMenu()
+  if (!node) return
+  pushHistory()
+  const id = newNodeId('node')
+  const newNode = {
+    id,
+    name: which === 'father' ? '父亲' : '母亲',
+    gender: which,
+    generation: Math.max(1, (node.generation || 1) - 1),
+    x: node.x - 80,
+    y: node.y - 120,
+    collapsed: false
+  }
+  nodes.value.push(newNode)
+  const rel = which === 'father'
+    ? (node.gender === 'female' ? 'father-daughter' : 'father-son')
+    : (node.gender === 'female' ? 'mother-daughter' : 'mother-son')
+  links.value.push({
+    id: newNodeId('link'),
+    source: newNode,
+    target: node,
+    relation: rel
+  })
+}
+
+// 右键菜单：删除
+const contextDeleteNode = () => {
+  const node = contextMenu.value.node
+  closeContextMenu()
+  if (node) deleteNode(node)
+}
+
+// 右键菜单：设为根（把该节点调整为最小代际 1，并相应下移其他成员）
+const setAsRootNode = () => {
+  const node = contextMenu.value.node
+  closeContextMenu()
+  if (!node) return
+  const minGen = Math.min(...nodes.value.map(n => n.generation || 1))
+  const currentGen = node.generation || 1
+  if (currentGen <= minGen) return
+  pushHistory()
+  const offset = currentGen - minGen
+  for (const n of nodes.value) {
+    const g = (n.generation || 1) - offset
+    n.generation = g < 1 ? 1 : g
+  }
+  applyTreeLayout()
+  updateTransform()
+}
+
+// 切换应用层
 const applyTreeLayout = () => {
   const generations = new Map()
 
@@ -616,7 +1594,8 @@ const RELATION_LABELS = {
 }
 
 // 根据代际差和路径形状计算双向关系称谓（A称B + B称A）。
-const getKinshipLabel = (genA, genB, nodeA, nodeB, directRelation, pathLen) => {
+// pathRelations 是路径上每条边按 A→B 方向的 link.relation，用于区分父系/母系旁系。
+const getKinshipLabel = (genA, genB, nodeA, nodeB, directRelation, pathLen, pathRelations = []) => {
   if (directRelation === 'husband-wife') {
     return { aToB: nodeA.gender === 'female' ? '妻子' : '丈夫', bToA: nodeB.gender === 'female' ? '妻子' : '丈夫' }
   }
@@ -654,6 +1633,16 @@ const getKinshipLabel = (genA, genB, nodeA, nodeB, directRelation, pathLen) => {
   const stepsUpFromA = (pathLen + genDiff) / 2
   const stepsUpFromB = (pathLen - genDiff) / 2
 
+  // A 走向共同祖先的最后一步边索引 = stepsUpFromA - 1
+  // father-xxx 表示走父系（A 的父辈是父），mother-xxx 表示走母系（A 的父辈是母）
+  const aToAncestorRel = pathRelations[stepsUpFromA - 1]
+  const isAPaternal = aToAncestorRel && aToAncestorRel.startsWith('father-')
+  const isAMaternal = aToAncestorRel && aToAncestorRel.startsWith('mother-')
+  // B 走向共同祖先的第一步边索引 = stepsUpFromA（共同祖先 → B 的第一步）
+  const bToAncestorRel = pathRelations[stepsUpFromA]
+  const isBPaternal = bToAncestorRel && bToAncestorRel.startsWith('father-')
+  const isBMaternal = bToAncestorRel && bToAncestorRel.startsWith('mother-')
+
   // 同代旁系
   if (genDiff === 0) {
     if (stepsUpFromA === 1) return { aToB: genderB ? '姐妹' : '兄弟', bToA: genderA ? '姐妹' : '兄弟' }
@@ -661,16 +1650,38 @@ const getKinshipLabel = (genA, genB, nodeA, nodeB, directRelation, pathLen) => {
     return { aToB: '同族同辈', bToA: '同族同辈' }
   }
 
-  // A是长辈（旁系）
+  // A是长辈（旁系）：A → ancestor → ... → B，B 是 A 的晚辈旁系
   if (aIsElder) {
-    if (stepsUpFromB === 1) return { aToB: genderB ? '侄女' : '侄子', bToA: genderA ? '姑母' : '叔伯' }
-    if (stepsUpFromB === 2) return { aToB: genderB ? '侄孙女' : '侄孙', bToA: genderA ? '姑祖母' : '叔祖父' }
+    if (stepsUpFromB === 1) {
+      // B 通过母系连到共同祖先时，B 是 A 的外甥/外甥女（母系旁系晚辈）
+      if (isBMaternal) {
+        return { aToB: genderB ? '外甥女' : '外甥', bToA: genderA ? '姨母' : '舅父' }
+      }
+      return { aToB: genderB ? '侄女' : '侄子', bToA: genderA ? '姑母' : '叔伯' }
+    }
+    if (stepsUpFromB === 2) {
+      if (isBMaternal) {
+        return { aToB: genderB ? '外甥孙女' : '外甥孙', bToA: genderA ? '姨祖母' : '舅祖父' }
+      }
+      return { aToB: genderB ? '侄孙女' : '侄孙', bToA: genderA ? '姑祖母' : '叔祖父' }
+    }
     return { aToB: '旁系晚辈', bToA: '旁系长辈' }
   }
 
-  // A是晚辈（旁系）
-  if (stepsUpFromA === 1) return { aToB: genderB ? '姑母' : '叔伯', bToA: genderA ? '侄女' : '侄子' }
-  if (stepsUpFromA === 2) return { aToB: genderB ? '姑祖母' : '叔祖父', bToA: genderA ? '侄孙女' : '侄孙' }
+  // A是晚辈（旁系）：A → ancestor → ... → B，B 是 A 的长辈旁系
+  if (stepsUpFromA === 1) {
+    // A 通过母系连到共同祖先时，A 的长辈旁系是姨/舅（母系）
+    if (isAMaternal) {
+      return { aToB: genderB ? '姨母' : '舅父', bToA: genderA ? '外甥女' : '外甥' }
+    }
+    return { aToB: genderB ? '姑母' : '叔伯', bToA: genderA ? '侄女' : '侄子' }
+  }
+  if (stepsUpFromA === 2) {
+    if (isAMaternal) {
+      return { aToB: genderB ? '姨祖母' : '舅祖父', bToA: genderA ? '外甥孙女' : '外甥孙' }
+    }
+    return { aToB: genderB ? '姑祖母' : '叔祖父', bToA: genderA ? '侄孙女' : '侄孙' }
+  }
   return { aToB: '旁系长辈', bToA: '旁系晚辈' }
 }
 
@@ -733,9 +1744,21 @@ const queryRelationship = () => {
      (l.source.id === nodeB.id && l.target.id === nodeA.id)))
   const directRelation = directLink ? directLink.relation : null
 
+  // 收集路径上每条边按 A→B 方向的关系类型
+  const linkMap = new Map(links.value.map(l => [l.id, l]))
+  const pathRelations = result.linkIds.map(id => linkMap.get(id)?.relation).filter(Boolean)
+
   const genDiff = (nodeA.generation || 1) - (nodeB.generation || 1)
   const pathLen = result.nodeIds.length - 1
-  const label = getKinshipLabel(nodeA.generation || 1, nodeB.generation || 1, nodeA, nodeB, directRelation, pathLen)
+  const label = getKinshipLabel(
+    nodeA.generation || 1,
+    nodeB.generation || 1,
+    nodeA,
+    nodeB,
+    directRelation,
+    pathLen,
+    pathRelations
+  )
 
   // 构建描述
   const intermediateCount = result.nodeIds.length - 2
@@ -813,11 +1836,144 @@ const stopNodeDrag = () => {
 // 根据缩放和平移状态更新 SVG 族谱组的 transform。
 const updateTransform = () => {
   if (svgGroup.value && svgCanvas.value) {
+    clampPan()
     const rect = svgCanvas.value.getBoundingClientRect()
     const cx = rect.width / 2 + panX.value
-    const cy = 86 + panY.value
+    const cy = rect.height / 2 + panY.value
     svgGroup.value.setAttribute('transform', `translate(${cx}, ${cy}) scale(${zoom.value})`)
   }
+}
+
+// ============ 图谱小地图（minimap） ============
+// minimap 是一个与画布等比的缩略图，包含节点、关系和当前视口框。
+// 视口框在 minimap 上的位置随 panX/panY/zoom 实时更新；
+// 用户在 minimap 上点击 / 拖拽视口框，可直接将画布视口平移到对应位置。
+
+const minimapSize = 180 // minimap 边长（viewBox 边长，单位为 minimap 坐标）
+const minimapPadding = 10 // 节点包围盒在 minimap 中的内边距
+const minimapBounds = computed(() => {
+  if (nodes.value.length === 0) {
+    return { minX: 0, minY: 0, maxX: 1, maxY: 1 }
+  }
+  const xs = nodes.value.map(n => n.x)
+  const ys = nodes.value.map(n => n.y)
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys)
+  }
+})
+const minimapScale = computed(() => {
+  const b = minimapBounds.value
+  const rangeX = (b.maxX - b.minX) || 1
+  const rangeY = (b.maxY - b.minY) || 1
+  const usable = minimapSize - minimapPadding * 2
+  return Math.min(usable / rangeX, usable / rangeY)
+})
+const minimapXOf = (x) => {
+  const b = minimapBounds.value
+  const rangeX = (b.maxX - b.minX) || 1
+  const offsetX = (x - b.minX) / rangeX * (rangeX * minimapScale.value)
+  return minimapPadding + offsetX
+}
+const minimapYOf = (y) => {
+  const b = minimapBounds.value
+  const rangeY = (b.maxY - b.minY) || 1
+  const offsetY = (y - b.minY) / rangeY * (rangeY * minimapScale.value)
+  return minimapPadding + offsetY
+}
+const minimapLinks = computed(() => {
+  if (!links.value.length || !nodes.value.length) return []
+  const map = new Map(nodes.value.map(n => [n.id, n]))
+  const out = []
+  for (const link of links.value) {
+    const sourceId = link.source?.id || link.source
+    const targetId = link.target?.id || link.target
+    const s = map.get(sourceId)
+    const t = map.get(targetId)
+    if (!s || !t) continue
+    out.push({
+      id: link.id,
+      x1: s.x,
+      y1: s.y,
+      x2: t.x,
+      y2: t.y,
+      spouse: link.relation === 'husband-wife'
+    })
+  }
+  return out
+})
+const viewportRect = computed(() => {
+  if (!svgCanvas.value || nodes.value.length === 0) {
+    return { x: 0, y: 0, w: minimapSize, h: minimapSize }
+  }
+  const rect = svgCanvas.value.getBoundingClientRect()
+  // 当前画布可见区域在世界坐标下是：
+  //   x ∈ [ -rect.width/(2*zoom) - panX/zoom,  rect.width/(2*zoom) - panX/zoom ]
+  // 注意 svgGroup 的中心是 (rect.width/2 + panX, rect.height/2 + panY)
+  const halfWWorld = rect.width / 2 / zoom.value
+  const halfHWorld = rect.height / 2 / zoom.value
+  // 中心点对应世界坐标的 ( -panX/zoom, -panY/zoom )
+  const cxWorld = -panX.value / zoom.value
+  const cyWorld = -panY.value / zoom.value
+  const x1World = cxWorld - halfWWorld
+  const y1World = cyWorld - halfHWorld
+  const x2World = cxWorld + halfWWorld
+  const y2World = cyWorld + halfHWorld
+  return {
+    x: minimapXOf(x1World),
+    y: minimapYOf(y1World),
+    w: minimapXOf(x2World) - minimapXOf(x1World),
+    h: minimapYOf(y2World) - minimapYOf(y1World)
+  }
+})
+
+// minimap 点击 / 拖拽：把画布视口中心移动到对应位置
+const onMinimapMouseDown = (e) => {
+  if (!svgCanvas.value || !minimapEl.value) return
+  // minimapEl 是 DIV，使用 getBoundingClientRect 拿到实际显示尺寸，再换算到 viewBox 坐标
+  const rect = minimapEl.value.getBoundingClientRect()
+  const scale = minimapSize / rect.width
+  const moveTo = (clientX, clientY) => {
+    const mx = (clientX - rect.left) * scale
+    const my = (clientY - rect.top) * scale
+    // 反推世界坐标
+    const b = minimapBounds.value
+    const rangeX = (b.maxX - b.minX) || 1
+    const rangeY = (b.maxY - b.minY) || 1
+    const worldX = (mx - minimapPadding) / minimapScale.value + b.minX
+    const worldY = (my - minimapPadding) / minimapScale.value + b.minY
+    panX.value = -worldX * zoom.value
+    panY.value = -worldY * zoom.value
+    updateTransform()
+  }
+  moveTo(e.clientX, e.clientY)
+  const onMove = (ev) => moveTo(ev.clientX, ev.clientY)
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+// 计算节点族的可视范围，并把 pan 限制在合理区间内防止视图跑飞。
+const clampPan = () => {
+  if (!svgCanvas.value || nodes.value.length === 0) return
+  const rect = svgCanvas.value.getBoundingClientRect()
+  const minX = Math.min(...nodes.value.map(n => n.x))
+  const maxX = Math.max(...nodes.value.map(n => n.x))
+  const minY = Math.min(...nodes.value.map(n => n.y))
+  const maxY = Math.max(...nodes.value.map(n => n.y))
+  const contentW = (maxX - minX + 200) * zoom.value
+  const contentH = (maxY - minY + 200) * zoom.value
+  // 横向：内容宽度大于画布时允许平移，限制在 [-(contentW/2), contentW/2] 之间
+  const maxPanX = Math.max(0, (contentW - rect.width) / 2)
+  // 纵向：内容高度大于画布时允许平移
+  const maxPanY = Math.max(0, (contentH - rect.height) / 2)
+  panX.value = Math.max(-maxPanX, Math.min(maxPanX, panX.value))
+  panY.value = Math.max(-maxPanY, Math.min(maxPanY, panY.value))
 }
 
 // 放大族谱视图。
@@ -830,6 +1986,32 @@ const zoomIn = () => {
 const zoomOut = () => {
   zoom.value = Math.max(zoom.value - 0.1, 0.3)
   updateTransform()
+}
+
+// 鼠标滚轮缩放：以鼠标位置为中心，符合主流编辑器习惯
+const onWheelZoom = (e) => {
+  if (!svgGroup.value || !svgCanvas.value) return
+  const rect = svgCanvas.value.getBoundingClientRect()
+  // 鼠标相对画布的坐标
+  const mx = e.clientX - rect.left
+  const my = e.clientY - rect.top
+  const oldZoom = zoom.value
+  // 滚轮向上（deltaY < 0）放大，向下缩小；步进约为每 100px 滚 0.1
+  const step = -e.deltaY * 0.001
+  let newZoom = oldZoom + step
+  newZoom = Math.max(0.3, Math.min(3, newZoom))
+  if (newZoom === oldZoom) return
+  zoom.value = newZoom
+  // 以鼠标为中心缩放：调整 panX/panY，使鼠标下方的世界坐标保持不变
+  const oldCx = rect.width / 2 + panX.value
+  const oldCy = rect.height / 2 + panY.value
+  const ratio = newZoom / oldZoom
+  const newCx = mx - (mx - oldCx) * ratio
+  const newCy = my - (my - oldCy) * ratio
+  panX.value = newCx - rect.width / 2
+  panY.value = newCy - rect.height / 2
+  // 直接写 transform，不走 updateTransform/clampPan，避免缩放锚点被边界限制挤偏
+  svgGroup.value.setAttribute('transform', `translate(${newCx}, ${newCy}) scale(${newZoom})`)
 }
 
 // 重置族谱视图的缩放和平移位置。
@@ -903,6 +2085,48 @@ const exportImage = async () => {
   }
 }
 
+// 导出当前族谱为 GEDCOM 5.5.1 文件
+const exportGedcom = async () => {
+  if (!hasData.value) return
+  try {
+    statusText.value = '正在导出 GEDCOM…'
+    const payload = {
+      members: nodes.value.map(n => ({
+        id: n.id,
+        name: n.name,
+        gender: n.gender,
+        generation: n.generation
+      })),
+      relationships: links.value.map(l => ({
+        source: l.source && l.source.id ? l.source.id : l.source,
+        target: l.target && l.target.id ? l.target.id : l.target,
+        relation: l.relation
+      })),
+      filename: 'genealogy.ged'
+    }
+    const res = await fetch('/api/export/gedcom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const ts = new Date().toISOString().replace(/[:-]/g, '').replace('T', '_').slice(0, 15)
+    link.download = `族谱_${ts}.ged`
+    link.href = url
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+    statusText.value = 'GEDCOM 导出成功'
+  } catch (err) {
+    console.error('GEDCOM 导出失败:', err)
+    statusText.value = 'GEDCOM 导出失败'
+  }
+}
+
 // 清空当前族谱数据并回到上传初始状态。
 const clearAll = () => {
   confirmDialog.value = {
@@ -930,36 +2154,373 @@ const clearAll = () => {
   }
 }
 
+// 会话管理：时间格式化
+const formatTime = (date) => {
+  if (!date) return ''
+  const d = new Date(date)
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  const ss = String(d.getSeconds()).padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
+}
+
+// 从后端拉取会话列表
+const fetchSessions = async () => {
+  try {
+    const res = await fetch('/api/sessions')
+    const json = await res.json()
+    if (json.success) {
+      sessions.value = json.data || []
+    } else {
+      console.error('拉取会话列表失败:', json.error)
+    }
+  } catch (err) {
+    console.error('拉取会话列表失败:', err)
+  }
+}
+
+// 创建新会话并加载
+const createNewSession = async () => {
+  try {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '未命名族谱' })
+    })
+    const json = await res.json()
+    if (json.success) {
+      currentSessionId.value = json.data.id
+      currentSessionName.value = json.data.name || '未命名族谱'
+      nodes.value = []
+      links.value = []
+      showUpload.value = true
+      statusText.value = '新会话已创建，请上传文档'
+      await fetchSessions()
+      // 新会话立即触发一次保存占位，随后用户编辑会自动保存
+    } else {
+      statusText.value = '创建会话失败：' + (json.error?.message || '未知错误')
+    }
+  } catch (err) {
+    console.error('创建会话失败:', err)
+    statusText.value = '创建会话失败，请检查后端服务'
+  }
+}
+
+// 加载指定会话
+const loadSession = async (id) => {
+  try {
+    const res = await fetch(`/api/sessions/${id}`)
+    const json = await res.json()
+    if (!json.success) {
+      statusText.value = '加载会话失败：' + (json.error?.message || '未知错误')
+      return
+    }
+    const data = json.data
+    const nodeMap = new Map()
+    nodes.value = (data.members || []).map(m => {
+      const node = {
+        id: m.id,
+        name: m.name || '',
+        gender: m.gender === 'female' ? 'female' : 'male',
+        generation: m.generation || 1,
+        birth: m.birth || '',
+        death: m.death || '',
+        note: m.note || '',
+        x: m.x != null ? m.x : 0,
+        y: m.y != null ? m.y : 0,
+        collapsed: false
+      }
+      nodeMap.set(node.id, node)
+      return node
+    })
+    links.value = (data.relationships || []).map((r, idx) => {
+      const source = nodeMap.get(r.source_id)
+      const target = nodeMap.get(r.target_id)
+      if (!source || !target) return null
+      return {
+        id: r.id || `link_${idx}`,
+        source,
+        target,
+        relation: r.relation
+      }
+    }).filter(l => l !== null)
+    currentSessionId.value = data.id
+    currentSessionName.value = data.name || '未命名族谱'
+    showUpload.value = nodes.value.length === 0
+    applyTreeLayout()
+    resetZoom()
+    pushHistory()
+    statusText.value = `已加载「${currentSessionName.value}」`
+  } catch (err) {
+    console.error('加载会话失败:', err)
+    statusText.value = '加载会话失败，请检查后端服务'
+  }
+}
+
+// 把当前画布数据保存到指定会话
+const saveCurrentSessionTo = async (id) => {
+  if (!id || nodes.value.length === 0) return
+  isSaving.value = true
+  try {
+    const payload = {
+      name: currentSessionName.value || '未命名族谱',
+      members: nodes.value.map(n => ({
+        id: n.id,
+        name: n.name,
+        gender: n.gender,
+        generation: n.generation,
+        birth: n.birth,
+        death: n.death,
+        note: n.note,
+        x: n.x,
+        y: n.y
+      })),
+      relationships: links.value.map(l => ({
+        id: l.id,
+        source: l.source && l.source.id ? l.source.id : l.source,
+        target: l.target && l.target.id ? l.target.id : l.target,
+        relation: l.relation
+      }))
+    }
+    const res = await fetch(`/api/sessions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    const json = await res.json()
+    if (json.success) {
+      lastSavedAt.value = new Date()
+      statusText.value = '会话已保存'
+      await fetchSessions()
+    } else {
+      statusText.value = '保存会话失败：' + (json.error?.message || '未知错误')
+    }
+  } catch (err) {
+    console.error('保存会话失败:', err)
+    statusText.value = '保存会话失败，请检查后端服务'
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// 保存当前会话（使用 currentSessionId）
+const saveCurrentSession = () => {
+  if (!currentSessionId.value) return
+  return saveCurrentSessionTo(currentSessionId.value)
+}
+
+// 删除会话
+const deleteSession = async (id) => {
+  const session = sessions.value.find(s => s.id === id)
+  confirmDialog.value = {
+    title: '确认删除会话',
+    message: `确定要删除会话「${session ? session.name : id}」吗？该会话下的所有数据将被永久删除。`,
+    confirmText: '删除',
+    danger: true,
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+        const json = await res.json()
+        if (json.success) {
+          if (currentSessionId.value === id) {
+            currentSessionId.value = null
+            currentSessionName.value = ''
+            nodes.value = []
+            links.value = []
+            showUpload.value = true
+            statusText.value = '等待上传文档'
+          }
+          await fetchSessions()
+        } else {
+          statusText.value = '删除会话失败：' + (json.error?.message || '未知错误')
+        }
+      } catch (err) {
+        console.error('删除会话失败:', err)
+        statusText.value = '删除会话失败，请检查后端服务'
+      } finally {
+        confirmDialog.value = null
+      }
+    }
+  }
+}
+
+// 开始重命名会话
+const startRenameSession = (session) => {
+  editingSessionId.value = session.id
+  sessionNameInput.value = session.name
+  renameSessionOriginalName = session.name
+  nextTick(() => {
+    sessionNameInputRef.value && sessionNameInputRef.value.focus()
+  })
+}
+
+// 确认重命名
+const commitRenameSession = async () => {
+  const id = editingSessionId.value
+  if (!id) return
+  const newName = sessionNameInput.value.trim() || '未命名族谱'
+  const session = sessions.value.find(s => s.id === id)
+  if (session && session.name === newName) {
+    editingSessionId.value = null
+    return
+  }
+  try {
+    const res = await fetch(`/api/sessions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    })
+    const json = await res.json()
+    if (json.success) {
+      if (currentSessionId.value === id) {
+        currentSessionName.value = newName
+      }
+      await fetchSessions()
+    } else {
+      statusText.value = '重命名失败：' + (json.error?.message || '未知错误')
+    }
+  } catch (err) {
+    console.error('重命名会话失败:', err)
+    statusText.value = '重命名失败，请检查后端服务'
+  } finally {
+    editingSessionId.value = null
+  }
+}
+
+// 取消重命名
+const cancelRenameSession = () => {
+  const id = editingSessionId.value
+  if (!id) return
+  const session = sessions.value.find(s => s.id === id)
+  if (session) {
+    session.name = renameSessionOriginalName
+  }
+  editingSessionId.value = null
+  sessionNameInput.value = ''
+}
+
+// 自动保存：防抖 2s
+let autoSaveTimer = null
+const scheduleAutoSave = () => {
+  if (!autoSaveEnabled.value || !currentSessionId.value || nodes.value.length === 0) return
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = setTimeout(() => {
+    saveCurrentSession()
+  }, 2000)
+}
+
+// 监听节点/关系变化，触发自动保存
+watch([nodes, links], () => {
+  scheduleAutoSave()
+}, { deep: true })
+
+// 监听自动保存开关，持久化到 localStorage
+watch(autoSaveEnabled, (val) => {
+  localStorage.setItem('genealogy_autosave', String(val))
+  if (val) scheduleAutoSave()
+})
+
 // 键盘快捷键处理。
 const handleKeyboard = (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+  // 输入框 / 文本域 / 弹窗输入元素内不触发快捷键（避免与文本编辑冲突）
+  const tag = (e.target && e.target.tagName) || ''
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
+  if (e.isComposing) return
+
+  // Ctrl+K / Cmd+K：打开搜索
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault()
+    if (hasData.value) openSearch()
+    return
+  }
+  // Ctrl+Z / Cmd+Z：撤销
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
     e.preventDefault()
     undo()
-  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) {
+    return
+  }
+  // Ctrl+Y / Ctrl+Shift+Z：重做
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y' || (e.shiftKey && (e.key === 'z' || e.key === 'Z')))) {
     e.preventDefault()
     redo()
-  } else if (e.key === '+' || e.key === '=') {
+    return
+  }
+  // 其它带 Ctrl/Meta / Alt 的组合键交给系统
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+
+  // F：打开搜索
+  if (e.key === 'f' || e.key === 'F') {
+    if (hasData.value) openSearch()
+    return
+  }
+  // ?：显示帮助
+  if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+    e.preventDefault()
+    showHelp()
+    return
+  }
+  // Esc：关闭弹窗 / 取消焦点
+  if (e.key === 'Escape') {
+    if (showSearchModal.value) { closeSearch(); return }
+    if (showHelpModal.value) { closeHelp(); return }
+    if (showSettings.value) { closeSettings(); return }
+    if (showNodeEdit.value) { closeNodeEdit(); return }
+    if (focusedNodeId.value) { focusedNodeId.value = null; return }
+  }
+  // Delete：删除聚焦节点
+  if (e.key === 'Delete' || e.key === 'Del') {
+    if (focusedNodeId.value) {
+      e.preventDefault()
+      const n = nodes.value.find(x => x.id === focusedNodeId.value)
+      if (n) deleteNode(n)
+    }
+    return
+  }
+  // 缩放 / 重置
+  if (e.key === '+' || e.key === '=') {
+    e.preventDefault()
     zoomIn()
-  } else if (e.key === '-') {
+  } else if (e.key === '-' || e.key === '_') {
+    e.preventDefault()
     zoomOut()
   } else if (e.key === '0') {
+    e.preventDefault()
     resetZoom()
   }
 }
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeyboard)
+  fetchSessions()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeyboard)
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
 })
 
 watch(() => canvasContainer.value, () => {
   if (canvasContainer.value) {
     setTimeout(updateTransform, 100)
   }
+})
+
+// 主题变化时同步到 <html>
+watch(theme, () => applyTheme())
+
+// 右键菜单：点击外部关闭
+const onDocumentMouseDownForContext = (e) => {
+  if (!contextMenu.value.show) return
+  const menuEl = document.querySelector('.context-menu')
+  if (menuEl && !menuEl.contains(e.target)) {
+    closeContextMenu()
+  }
+}
+onMounted(() => {
+  document.addEventListener('mousedown', onDocumentMouseDownForContext)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocumentMouseDownForContext)
 })
 </script>
 
@@ -1108,6 +2669,13 @@ select {
   color: #e8a090;
 }
 
+.btn-sm {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .btn-icon {
   width: 38px;
   padding: 0;
@@ -1121,6 +2689,35 @@ select {
 
 .btn-icon:hover:not(:disabled) {
   background: rgba(255, 246, 228, 0.2);
+}
+
+.btn-icon-sm {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--muted-ink);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-icon-sm:hover:not(:disabled) {
+  background: var(--soft, #f5efe2);
+  color: var(--ink);
+}
+
+.btn-icon-sm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-icon-sm.danger:hover {
+  background: rgba(176, 53, 53, 0.12);
+  color: #b53535;
 }
 
 .btn-danger {
@@ -1137,6 +2734,39 @@ select {
   width: 1px;
   height: 24px;
   background: rgba(235, 209, 170, 0.24);
+}
+
+/* AI 服务来源徽章 */
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  user-select: none;
+  letter-spacing: 0.02em;
+}
+
+.provider-badge.tone-cloud {
+  background: rgba(36, 130, 230, 0.12);
+  color: #2482e6;
+  border-color: rgba(36, 130, 230, 0.32);
+}
+
+.provider-badge.tone-local {
+  background: rgba(56, 161, 105, 0.14);
+  color: #2f855a;
+  border-color: rgba(56, 161, 105, 0.32);
+}
+
+.provider-badge.tone-fallback {
+  background: rgba(221, 107, 32, 0.14);
+  color: #c05621;
+  border-color: rgba(221, 107, 32, 0.4);
 }
 
 .btn.large {
@@ -1181,6 +2811,205 @@ select {
 
 .section-label {
   margin-bottom: 10px;
+}
+
+/* 会话管理面板 */
+.session-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  transition: background 0.15s ease;
+}
+
+.session-item:hover {
+  background: var(--soft, #f5efe2);
+}
+
+.session-item.active {
+  background: rgba(155, 47, 34, 0.1);
+  border-color: rgba(155, 47, 34, 0.2);
+}
+
+.session-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.session-name-input {
+  flex: 1;
+  height: 30px;
+  padding: 0 6px;
+  font-size: 14px;
+}
+
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.auto-save-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  font-size: 13px;
+}
+
+.autosave-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.save-status {
+  color: var(--muted-ink);
+  font-size: 12px;
+}
+
+.save-status.saving {
+  color: #c4862f;
+}
+
+.save-status.saved {
+  color: var(--green);
+}
+
+/* 族谱统计图表 */
+.stat-sub {
+  font-size: 12px;
+  color: var(--muted-ink);
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+.stat-chart {
+  width: 100%;
+  height: 110px;
+  display: block;
+  background: rgba(122, 39, 27, 0.03);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.stat-axis {
+  stroke: var(--line);
+  stroke-width: 0.5;
+}
+
+.stat-bar {
+  fill: #b89c8a;
+}
+
+.stat-bar.peak {
+  fill: var(--seal);
+}
+
+.stat-bar-label {
+  font-size: 7px;
+  fill: var(--muted-ink);
+  text-anchor: middle;
+  font-weight: 600;
+}
+
+.stat-bar-value {
+  font-size: 7px;
+  fill: var(--ink);
+  text-anchor: middle;
+  font-weight: 700;
+}
+
+.gender-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.gender-ring {
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+}
+
+.gender-ring-bg {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 8;
+}
+
+.gender-ring-male {
+  fill: none;
+  stroke: #6b6b6b;
+  stroke-width: 8;
+  stroke-linecap: butt;
+  transition: stroke-dasharray 0.4s ease;
+}
+
+.gender-ring-text {
+  font-size: 12px;
+  fill: var(--ink);
+  text-anchor: middle;
+  font-weight: 800;
+}
+
+.gender-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.legend-swatch.male {
+  background: #6b6b6b;
+}
+
+.legend-swatch.female {
+  background: #c97a8b;
 }
 
 .status-line {
@@ -1604,6 +3433,54 @@ select {
   filter: drop-shadow(0 0 8px rgba(155, 47, 34, 0.5));
 }
 
+/* 折叠/展开角标 */
+.collapse-badge {
+  cursor: pointer;
+  transform: translate(28px, -28px);
+}
+.collapse-badge circle {
+  fill: #c4421f;
+  stroke: #fff;
+  stroke-width: 1.5;
+  transition: fill 0.15s ease;
+}
+.collapse-badge:hover circle {
+  fill: #9b2f22;
+}
+.collapse-badge text {
+  fill: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+}
+.collapse-badge.collapsed circle {
+  fill: #5a6f8c;
+}
+.collapse-badge.collapsed:hover circle {
+  fill: #42546d;
+}
+
+/* 焦点高亮：分支外的节点/边淡化 */
+.genealogy-canvas .node.dimmed circle,
+.genealogy-canvas .node.dimmed text {
+  opacity: 0.18;
+  transition: opacity 0.18s ease;
+}
+.genealogy-canvas .node.dimmed .collapse-badge {
+  opacity: 0.18;
+}
+.genealogy-canvas .node.focused circle {
+  stroke: #f5a623;
+  stroke-width: 5;
+  filter: drop-shadow(0 0 6px rgba(245, 166, 35, 0.7));
+}
+.genealogy-canvas .link.dimmed {
+  opacity: 0.08;
+  transition: opacity 0.18s ease;
+}
+
 .zoom-controls {
   position: absolute;
   right: 22px;
@@ -1641,6 +3518,111 @@ select {
   color: var(--muted-ink);
   font-size: 14px;
   font-weight: 800;
+}
+
+/* 图谱小地图 */
+.minimap {
+  position: absolute;
+  right: 22px;
+  top: 22px;
+  width: 180px;
+  height: 180px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(250, 246, 243, 0.92);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px rgba(122, 39, 27, 0.08);
+  cursor: pointer;
+  z-index: 5;
+}
+
+.minimap-svg {
+  width: 100%;
+  height: calc(100% - 18px);
+  display: block;
+}
+
+.minimap circle.male {
+  fill: #6b6b6b;
+}
+
+.minimap circle.female {
+  fill: #c97a8b;
+}
+
+.minimap .minimap-link {
+  stroke: #b89c8a;
+  stroke-width: 0.4;
+  fill: none;
+}
+
+.minimap .minimap-link.spouse {
+  stroke: #c97a8b;
+  stroke-dasharray: 1.5 1.5;
+}
+
+.minimap .minimap-viewport {
+  fill: rgba(122, 39, 27, 0.12);
+  stroke: var(--seal);
+  stroke-width: 1.2;
+  pointer-events: none;
+}
+
+.minimap-label {
+  margin-top: 2px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--muted-ink);
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+/* 画布拖拽文件提示遮罩 */
+.canvas-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(122, 39, 27, 0.08);
+  backdrop-filter: blur(2px);
+  border: 3px dashed var(--seal);
+  border-radius: 8px;
+  pointer-events: none;
+  animation: dropzone-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.canvas-dropzone-inner {
+  text-align: center;
+  background: rgba(250, 246, 243, 0.96);
+  border: 1px solid var(--seal);
+  border-radius: 10px;
+  padding: 24px 32px;
+  box-shadow: 0 8px 24px rgba(122, 39, 27, 0.18);
+}
+
+.canvas-dropzone-inner p {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--ink);
+  margin: 8px 0 4px;
+}
+
+.canvas-dropzone-inner small {
+  color: var(--muted-ink);
+  font-size: 12px;
+}
+
+.dropzone-icon {
+  font-size: 42px;
+  color: var(--seal);
+  line-height: 1;
+}
+
+@keyframes dropzone-pulse {
+  from { background: rgba(122, 39, 27, 0.06); }
+  to { background: rgba(122, 39, 27, 0.14); }
 }
 
 .modal {
@@ -1780,6 +3762,318 @@ select {
 .zoom-controls button:focus-visible {
   outline: 2px solid var(--seal);
   outline-offset: 2px;
+}
+
+/* 搜索弹窗 */
+.search-modal {
+  max-width: 520px;
+  width: 90vw;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+.search-input {
+  margin-bottom: 12px;
+  font-size: 16px;
+}
+.search-results {
+  max-height: 50vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--rule, #e8dccb);
+  padding-top: 8px;
+}
+.search-empty {
+  text-align: center;
+  padding: 32px 0;
+  color: var(--muted, #8a7d6b);
+  font-size: 14px;
+}
+.search-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 15px;
+  text-align: left;
+  color: var(--ink);
+  font-family: inherit;
+}
+.search-item:hover,
+.search-item:focus-visible {
+  background: var(--soft, #f5efe2);
+  outline: none;
+}
+.search-item-name {
+  font-weight: 600;
+}
+.search-item-meta {
+  font-size: 13px;
+  color: var(--muted, #8a7d6b);
+}
+.search-more {
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted, #8a7d6b);
+}
+
+/* 视图筛选 chips */
+.filter-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.chip {
+  flex: 1 1 auto;
+  min-width: 60px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--soft, #f5efe2);
+  border: 1px solid var(--rule, #e8dccb);
+  border-radius: 14px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.chip:hover:not(:disabled) {
+  background: #ede0c5;
+}
+.chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chip.active {
+  background: var(--seal, #7a271b);
+  color: #fff;
+  border-color: var(--seal, #7a271b);
+}
+.hint-mini {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted, #8a7d6b);
+}
+
+/* 帮助弹窗 */
+.help-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px 0;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--ink);
+}
+.help-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+kbd {
+  display: inline-block;
+  min-width: 24px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  text-align: center;
+  background: var(--soft, #f5efe2);
+  border: 1px solid var(--rule, #e8dccb);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--ink);
+}
+.help-tip {
+  font-size: 13px;
+  color: var(--muted, #8a7d6b);
+  line-height: 1.6;
+  border-top: 1px dashed var(--rule, #e8dccb);
+  padding-top: 12px;
+  margin: 0;
+}
+
+/* 节点闪烁动画（搜索后定位） */
+@keyframes node-pulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(245, 166, 35, 0));
+  }
+  50% {
+    transform: scale(1.18);
+    filter: drop-shadow(0 0 14px rgba(245, 166, 35, 0.95));
+  }
+}
+.genealogy-canvas .node.pulse {
+  animation: node-pulse 1.6s ease-in-out;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* 暗色模式 */
+[data-theme="dark"] {
+  --ink: #ece5d4;
+  --muted-ink: #9b9382;
+  --paper: #1a1714;
+  --paper-deep: #2a261f;
+  --panel: #221d18;
+  --line: #3d382d;
+  --seal: #d97a4a;
+  --seal-dark: #b85a30;
+  --green: #6f8a72;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  --soft: #2a261f;
+  --rule: #3d382d;
+  --muted: #9b9382;
+  --paper-2: #221d18;
+  --seal-2: #c4421f;
+}
+[data-theme="dark"] body,
+[data-theme="dark"] .app-shell {
+  background: var(--paper);
+  color: var(--ink);
+}
+[data-theme="dark"] .genealogy-canvas {
+  background: var(--paper-deep);
+}
+[data-theme="dark"] .modal-content,
+[data-theme="dark"] .panel-section,
+[data-theme="dark"] .topbar,
+[data-theme="dark"] .query-panel,
+[data-theme="dark"] .form-input,
+[data-theme="dark"] .form-select,
+[data-theme="dark"] .zoom-controls {
+  background-color: var(--panel);
+  color: var(--ink);
+  border-color: var(--line);
+}
+[data-theme="dark"] .btn-plain {
+  background: var(--paper-deep);
+  color: var(--ink);
+  border-color: var(--line);
+}
+[data-theme="dark"] .btn-plain:hover {
+  background: #35302a;
+}
+[data-theme="dark"] .session-item:hover {
+  background: #35302a;
+}
+[data-theme="dark"] .session-item.active {
+  background: rgba(217, 122, 74, 0.18);
+  border-color: rgba(217, 122, 74, 0.35);
+}
+[data-theme="dark"] .btn-icon-sm:hover:not(:disabled) {
+  background: #35302a;
+}
+[data-theme="dark"] .save-status.saved {
+  color: #8db88f;
+}
+[data-theme="dark"] .form-input,
+[data-theme="dark"] .form-select {
+  background: var(--paper);
+  color: var(--ink);
+}
+[data-theme="dark"] .node circle {
+  filter: brightness(0.95) saturate(0.9);
+}
+[data-theme="dark"] .genealogy-canvas .node text {
+  fill: var(--ink);
+}
+[data-theme="dark"] .genealogy-canvas .link {
+  stroke: #6e6358;
+}
+[data-theme="dark"] .genealogy-canvas .link.spouse {
+  stroke: #8a7d6b;
+}
+[data-theme="dark"] .zodiac-watermark {
+  color: rgba(255, 255, 255, 0.05);
+}
+[data-theme="dark"] .upload-zone {
+  background: var(--paper-deep);
+  border-color: var(--line);
+}
+[data-theme="dark"] .minimap {
+  background: rgba(26, 22, 18, 0.92);
+  border-color: var(--line);
+}
+[data-theme="dark"] .minimap circle.male {
+  fill: #b8b8b8;
+}
+[data-theme="dark"] .minimap circle.female {
+  fill: #d49aa6;
+}
+[data-theme="dark"] .minimap .minimap-link {
+  stroke: #6b5b4a;
+}
+[data-theme="dark"] .minimap .minimap-viewport {
+  fill: rgba(212, 154, 166, 0.18);
+  stroke: #d49aa6;
+}
+[data-theme="dark"] .canvas-dropzone {
+  background: rgba(212, 154, 166, 0.1);
+  border-color: #d49aa6;
+}
+[data-theme="dark"] .canvas-dropzone-inner {
+  background: rgba(26, 22, 18, 0.96);
+  border-color: #d49aa6;
+}
+[data-theme="dark"] .dropzone-icon {
+  color: #d49aa6;
+}
+
+/* 右键菜单 */
+.context-menu {
+  position: fixed;
+  z-index: 1100;
+  min-width: 160px;
+  background: #fff;
+  border: 1px solid var(--rule, #e8dccb);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  font-size: 14px;
+  color: var(--ink);
+  user-select: none;
+}
+[data-theme="dark"] .context-menu {
+  background: var(--paper-2);
+}
+.context-menu-header {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted, #8a7d6b);
+  border-bottom: 1px solid var(--rule, #e8dccb);
+  margin-bottom: 4px;
+}
+.context-item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+.context-item:hover {
+  background: var(--soft, #f5efe2);
+}
+[data-theme="dark"] .context-item:hover {
+  background: #35302a;
+}
+.context-item.danger {
+  color: #b53636;
+}
+.context-divider {
+  height: 1px;
+  background: var(--rule, #e8dccb);
+  margin: 4px 0;
 }
 
 /* Reduced motion preference */
