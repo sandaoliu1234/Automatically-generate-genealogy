@@ -66,7 +66,7 @@
         <section class="panel-section">
           <p class="section-label">族谱会话</p>
           <div class="session-header">
-            <button class="btn btn-sm" @click="createNewSession">+ 新建</button>
+            <button class="btn btn-sm" @click="createNewSession" :disabled="isLoading">+ 新建</button>
             <button class="btn btn-sm btn-plain" @click="fetchSessions" title="刷新列表">↻</button>
           </div>
           <div class="session-list" v-if="sessions.length">
@@ -75,7 +75,7 @@
               :key="session.id"
               :class="['session-item', { active: session.id === currentSessionId }]"
             >
-              <span v-if="editingSessionId !== session.id" class="session-name" @click="loadSession(session.id)">{{ session.name }}</span>
+              <span v-if="editingSessionId !== session.id" class="session-name" :class="{ 'session-disabled': isLoading }" @click="!isLoading && loadSession(session.id)">{{ session.name }}</span>
               <input
                 v-else
                 v-model="sessionNameInput"
@@ -86,9 +86,9 @@
                 @keyup.esc="cancelRenameSession"
               />
               <div class="session-actions">
-                <button class="btn-icon-sm" @click.stop="startRenameSession(session)" title="重命名">✏️</button>
-                <button class="btn-icon-sm" @click.stop="saveCurrentSessionTo(session.id)" title="保存到本会话" :disabled="!hasData">💾</button>
-                <button class="btn-icon-sm danger" @click.stop="deleteSession(session.id)" title="删除">🗑️</button>
+                <button class="btn-icon-sm" @click.stop="startRenameSession(session)" title="重命名" :disabled="isLoading">✏️</button>
+                <button class="btn-icon-sm" @click.stop="saveCurrentSessionTo(session.id)" title="保存到本会话" :disabled="!hasData || session.id !== currentSessionId">💾</button>
+                <button class="btn-icon-sm danger" @click.stop="deleteSession(session.id)" title="删除" :disabled="isLoading">🗑️</button>
               </div>
             </div>
           </div>
@@ -303,6 +303,7 @@
               <p class="loading-title">正在整理谱系</p>
               <p class="loading-text">{{ loadingMessage }}</p>
             </div>
+            <button class="btn btn-sm btn-plain loading-cancel" @click="cancelAnalysis">取消分析</button>
           </div>
         </div>
 
@@ -634,6 +635,11 @@ const loadingMessage = ref('正在分析文档...')
 const showUpload = ref(true)
 const hasError = ref(false)
 const statusText = ref('')
+
+// 会话状态缓存：每个会话独立存储 nodes/links，互不影响
+const sessionStateCache = new Map()
+// AI 分析的 AbortController，用于取消正在进行的分析
+let currentAbortController = null
 const operationMessage = ref('')
 const showNodeEdit = ref(false)
 const editingNode = ref({})
@@ -649,6 +655,54 @@ const highlightedNodes = ref([])
 const highlightedLinks = ref([])
 
 const hasData = computed(() => nodes.value.length > 0)
+
+// 保存当前画布状态到指定会话的缓存
+const cacheCurrentState = () => {
+  if (currentSessionId.value) {
+    sessionStateCache.set(currentSessionId.value, {
+      nodes: JSON.parse(JSON.stringify(nodes.value)),
+      links: links.value.map(l => ({
+        id: l.id,
+        source: l.source?.id || l.source,
+        target: l.target?.id || l.target,
+        relation: l.relation
+      })),
+      name: currentSessionName.value,
+      zoom: zoom.value,
+      panX: panX.value,
+      panY: panY.value
+    })
+  }
+}
+
+// 从缓存恢复指定会话的画布状态
+const restoreState = (sessionId) => {
+  const cached = sessionStateCache.get(sessionId)
+  if (cached) {
+    const nodeMap = new Map()
+    nodes.value = cached.nodes.map(n => { const node = { ...n }; nodeMap.set(node.id, node); return node })
+    links.value = cached.links.map(l => ({
+      ...l,
+      source: nodeMap.get(l.source) || l.source,
+      target: nodeMap.get(l.target) || l.target
+    }))
+    currentSessionName.value = cached.name || '未命名族谱'
+    zoom.value = cached.zoom || 1
+    panX.value = cached.panX || 0
+    panY.value = cached.panY || 0
+  } else {
+    nodes.value = []
+    links.value = []
+  }
+  showUpload.value = nodes.value.length === 0
+}
+
+// 取消正在进行的 AI 分析
+const cancelAnalysis = () => {
+  if (currentAbortController) {
+    currentAbortController.abort()
+  }
+}
 
 // ============ 统计图表 ============
 // 代际分布 + 性别比例，所有数据都从 nodes 派生
@@ -732,9 +786,6 @@ const editingSessionId = ref(null)
 const sessionNameInputRef = ref(null)
 // 会话重命名时的原始名称，用于 ESC 取消恢复
 let renameSessionOriginalName = ''
-
-// 主题初始化（应用 data-theme 到 <html>）
-applyTheme()
 
 let isDragging = false
 let isNodeDragging = false
@@ -906,10 +957,37 @@ const handleDrop = async (event) => {
 
 // 共用的 GEDCOM 导入核心逻辑：上传页面 / 画布 / 拖拽 都走这里
 const importGedcomFromText = async (filename, text) => {
+  // 先刷出当前会话的待保存数据
+  await flushAutoSave()
+  const sessionAtStart = currentSessionId.value
+
   isLoading.value = true
   hasError.value = false
   showUpload.value = false
   loadingMessage.value = '正在解析 GEDCOM 文件...'
+
+  // 如果当前会话已有数据，预创建新会话存放导入结果
+  let targetSessionId = sessionAtStart
+  if (sessionAtStart && nodes.value.length > 0) {
+    try {
+      cacheCurrentState()
+      const name = (filename || 'GEDCOM').replace(/\.ged$/i, '')
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      })
+      const json = await res.json()
+      if (json.success) {
+        targetSessionId = json.data.id
+      }
+    } catch (err) {
+      console.error('预创建会话失败:', err)
+    }
+  } else {
+    currentSessionName.value = (filename || 'GEDCOM').replace(/\.ged$/i, '')
+  }
+
   try {
     const resp = await fetch('/api/import/gedcom', {
       method: 'POST',
@@ -924,8 +1002,7 @@ const importGedcomFromText = async (filename, text) => {
     if (!members || members.length === 0) {
       throw new Error('GEDCOM 中未找到成员记录')
     }
-    currentSessionName.value = (filename || 'GEDCOM').replace(/\.ged$/i, '')
-    await buildGenealogyData(members, relationships)
+    await buildGenealogyData(members, relationships, targetSessionId)
     statusText.value = `已从 ${filename} 导入，共 ${members.length} 人`
   } catch (err) {
     hasError.value = true
@@ -953,10 +1030,38 @@ const onCanvasDragLeave = (event) => {
 
 // 根据文档类型选择前端读取或后端解析，并把结果交给族谱绘制逻辑。
 const analyzeDocument = async (file) => {
+  // 先刷出当前会话的待保存数据
+  await flushAutoSave()
+  // 记录发起分析时的会话 ID
+  const sessionAtStart = currentSessionId.value
+
+  // 创建 AbortController 以支持取消分析
+  currentAbortController = new AbortController()
+  const signal = currentAbortController.signal
+
   isLoading.value = true
   hasError.value = false
   showUpload.value = false
   loadingMessage.value = '正在读取文档...'
+
+  // 如果当前会话已有数据，预创建新会话存放分析结果（不覆盖旧会话）
+  let targetSessionId = sessionAtStart
+  if (sessionAtStart && nodes.value.length > 0) {
+    try {
+      cacheCurrentState()
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name.replace(/\.[^.]+$/, '') || '未命名族谱' })
+      })
+      const json = await res.json()
+      if (json.success) {
+        targetSessionId = json.data.id
+      }
+    } catch (err) {
+      console.error('预创建会话失败:', err)
+    }
+  }
 
   try {
     let content = ''
@@ -978,10 +1083,19 @@ const analyzeDocument = async (file) => {
       const response = await fetch(`${API_BASE_URL}/upload?force=${forceMode.value}`, {
         method: 'POST',
         headers,
-        body: formData
+        body: formData,
+        signal
       })
 
-      if (!response.ok) throw new Error('文档上传失败，请检查文件格式是否正确')
+      // 把后端的详细错误信息透传给用户
+      if (!response.ok) {
+        let backendMsg = '文档上传失败，请检查文件格式是否正确'
+        try {
+          const errJson = await response.json()
+          if (errJson?.error?.message) backendMsg = errJson.error.message
+        } catch (_) { /* 非 json 响应保持默认文案 */ }
+        throw new Error(backendMsg)
+      }
 
       const result = await response.json()
       if (!result.success) throw new Error(result.error?.message || '无法从文档中提取族谱信息')
@@ -992,7 +1106,8 @@ const analyzeDocument = async (file) => {
         forced: result.data?.forced,
         primaryError: result.data?.primaryError
       }
-      buildGenealogyData(result.data.members, result.data.relationships)
+      loadingMessage.value = '正在构建谱系图...'
+      await buildGenealogyData(result.data.members, result.data.relationships, targetSessionId)
       return
     }
 
@@ -1003,7 +1118,8 @@ const analyzeDocument = async (file) => {
     const response = await fetch(`${API_BASE_URL}/analyze?force=${forceMode.value}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ content, filename: file.name })
+      body: JSON.stringify({ content, filename: file.name }),
+      signal
     })
 
     if (!response.ok) throw new Error('AI 分析服务暂时不可用，请稍后重试')
@@ -1017,11 +1133,16 @@ const analyzeDocument = async (file) => {
       forced: result.data?.forced,
       primaryError: result.data?.primaryError
     }
-    buildGenealogyData(result.data.members, result.data.relationships)
+    loadingMessage.value = '正在构建谱系图...'
+    await buildGenealogyData(result.data.members, result.data.relationships, targetSessionId)
   } catch (error) {
+    if (error.name === 'AbortError') {
+      statusText.value = '分析已取消'
+      showUpload.value = true
+      return
+    }
     console.error('分析失败:', error)
     hasError.value = true
-    // fetch 失败（TypeError: Failed to fetch）通常是后端没启动 / 代理不通
     if (error instanceof TypeError && /fetch/i.test(error.message)) {
       statusText.value = '无法连接后端服务，请确认 backend 已在端口 3100 启动（node server.js）'
     } else {
@@ -1030,6 +1151,7 @@ const analyzeDocument = async (file) => {
     showUpload.value = true
   } finally {
     isLoading.value = false
+    currentAbortController = null
   }
 }
 
@@ -1039,11 +1161,12 @@ const analyzeDocument = async (file) => {
 //   - GEDCOM 导入 ：relationships[].source_id/target_id 指向 member.id
 //   - 数据库加载 ：relationships[].source/target 可能是 id 或 name
 // 优先按 id 查，回退到按 name 查，保证所有数据源都能正常连线。
-const buildGenealogyData = async (members, relationships) => {
+// targetSessionId：分析结果写入的目标会话，若与当前画布不同则仅写缓存不干扰画布。
+const buildGenealogyData = async (members, relationships, targetSessionId) => {
   const nodeById = new Map()
   const nodeByName = new Map()
 
-  nodes.value = members.map((member, index) => {
+  const newNodes = members.map((member, index) => {
     const id = member.id || `node_${index}`
     const node = {
       id,
@@ -1063,7 +1186,7 @@ const buildGenealogyData = async (members, relationships) => {
     if (key == null) return null
     if (nodeById.has(key)) return nodeById.get(key)
     if (nodeByName.has(key)) return nodeByName.get(key)
-    // GEDCOM 解析会保留 @I1@ 这种原始 xref，作为最后一道兜底
+    // GEDCOM 解析会保留 @I1@ 这种原始 xref，作为最后一道兆底
     if (typeof key === 'string' && key.startsWith('@')) {
       const m = members.find(mb => mb.id === key || mb.gedcomXref === key)
       if (m) return nodeById.get(m.id)
@@ -1071,7 +1194,7 @@ const buildGenealogyData = async (members, relationships) => {
     return null
   }
 
-  links.value = relationships
+  const newLinks = relationships
     .map((rel, index) => {
       const sourceKey = rel.source_id || rel.source || rel.person1
       const targetKey = rel.target_id || rel.target || rel.person2
@@ -1088,31 +1211,85 @@ const buildGenealogyData = async (members, relationships) => {
     })
     .filter(link => link !== null)
 
-  applyTreeLayout()
-  pushHistory()
-  statusText.value = '分析完成，可双击节点编辑'
+  // 判断是否应该更新当前画布（目标会话就是当前画布显示的会话）
+  const isCurrentSession = targetSessionId === currentSessionId.value || !targetSessionId
 
-  // 如果当前没有绑定会话，自动创建一个新会话并保存
-  if (!currentSessionId.value) {
-    try {
-      const res = await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: '未命名族谱' })
-      })
-      const json = await res.json()
-      if (json.success) {
-        currentSessionId.value = json.data.id
-        currentSessionName.value = json.data.name || '未命名族谱'
-        await saveCurrentSession()
-        await fetchSessions()
+  if (isCurrentSession) {
+    // 直接更新画布
+    nodes.value = newNodes
+    links.value = newLinks
+    applyTreeLayout()
+    // 自适应缩放，确保全部内容可见
+    nextTick(() => fitToView())
+    pushHistory()
+    statusText.value = '分析完成，可双击节点编辑'
+
+    // 如果当前没有绑定会话，自动创建一个新会话并保存
+    if (!currentSessionId.value) {
+      try {
+        const res = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: '未命名族谱' })
+        })
+        const json = await res.json()
+        if (json.success) {
+          currentSessionId.value = json.data.id
+          currentSessionName.value = json.data.name || '未命名族谱'
+          await saveCurrentSession()
+          await fetchSessions()
+        }
+      } catch (err) {
+        console.error('自动创建会话失败:', err)
       }
-    } catch (err) {
-      console.error('自动创建会话失败:', err)
+    } else {
+      scheduleAutoSave()
     }
   } else {
-    // 已有会话时立即自动保存一次
-    scheduleAutoSave()
+    // 目标会话不是当前画布，将结果写入目标会话的缓存和数据库，不干扰当前画布
+    const nodeMap = new Map()
+    const serializableNodes = newNodes.map(n => {
+      const node = { ...n }
+      nodeMap.set(node.id, node)
+      return node
+    })
+    const serializableLinks = newLinks.map(l => ({
+      id: l.id,
+      source: l.source.id,
+      target: l.target.id,
+      relation: l.relation
+    }))
+
+    // 写入会话缓存
+    sessionStateCache.set(targetSessionId, {
+      nodes: serializableNodes,
+      links: serializableLinks,
+      name: currentSessionName.value,
+      zoom: 1, panX: 0, panY: 0
+    })
+
+    // 保存到数据库（不干扰当前画布显示）
+    try {
+      await fetch(`/api/sessions/${targetSessionId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: serializableNodes.length > 0 ? `${serializableNodes[0].name}的族谱` : '未命名族谱',
+          members: serializableNodes.map(n => ({
+            id: n.id, name: n.name, gender: n.gender,
+            generation: n.generation, x: n.x, y: n.y
+          })),
+          relationships: serializableLinks
+        })
+      })
+      await fetchSessions()
+      statusText.value = '新族谱已生成，可在左侧会话列表中查看'
+    } catch (err) {
+      console.error('保存新族谱失败:', err)
+    }
+
+    // 恢复当前画布显示的状态
+    restoreState(currentSessionId.value)
   }
 }
 
@@ -1780,11 +1957,19 @@ const queryRelationship = () => {
 }
 
 // 开始拖拽画布，用于移动整个族谱视图。
+// 拖拽中关闭边界限制，避免边缘抖动；用 ref 让所有 drag 处理函数共享
+const isClampPaused = ref(false)
+
 const startCanvasDrag = (e) => {
   if (isNodeDragging) return
+  // 只响应左键，避免右键/中键误触发（与右键菜单和滚轮缩放分离）
+  if (e.button !== 0) return
   isDragging = true
+  isClampPaused.value = true
   startX = e.clientX - panX.value
   startY = e.clientY - panY.value
+  // 视觉反馈：抓握中
+  if (typeof document !== 'undefined') document.body.style.cursor = 'grabbing'
   document.addEventListener('mousemove', onCanvasDrag)
   document.addEventListener('mouseup', stopCanvasDrag)
 }
@@ -1800,8 +1985,12 @@ const onCanvasDrag = (e) => {
 // 结束画布拖拽并移除临时事件监听。
 const stopCanvasDrag = () => {
   isDragging = false
+  isClampPaused.value = false
+  if (typeof document !== 'undefined') document.body.style.cursor = ''
   document.removeEventListener('mousemove', onCanvasDrag)
   document.removeEventListener('mouseup', stopCanvasDrag)
+  // 拖完再 clamp 一次，把画布从边界外拉回
+  updateTransform()
 }
 
 // 开始拖拽单个成员节点，用于手动微调谱图。
@@ -1961,17 +2150,17 @@ const onMinimapMouseDown = (e) => {
 // 计算节点族的可视范围，并把 pan 限制在合理区间内防止视图跑飞。
 const clampPan = () => {
   if (!svgCanvas.value || nodes.value.length === 0) return
-  const rect = svgCanvas.value.getBoundingClientRect()
+  if (isClampPaused.value) return
   const minX = Math.min(...nodes.value.map(n => n.x))
   const maxX = Math.max(...nodes.value.map(n => n.x))
   const minY = Math.min(...nodes.value.map(n => n.y))
   const maxY = Math.max(...nodes.value.map(n => n.y))
   const contentW = (maxX - minX + 200) * zoom.value
   const contentH = (maxY - minY + 200) * zoom.value
-  // 横向：内容宽度大于画布时允许平移，限制在 [-(contentW/2), contentW/2] 之间
-  const maxPanX = Math.max(0, (contentW - rect.width) / 2)
-  // 纵向：内容高度大于画布时允许平移
-  const maxPanY = Math.max(0, (contentH - rect.height) / 2)
+  // 允许平移直到内容边缘到达视口边缘（留 padding 余量），而非硬性限制在视口中心
+  const padding = 100
+  const maxPanX = contentW / 2 + padding
+  const maxPanY = contentH / 2 + padding
   panX.value = Math.max(-maxPanX, Math.min(maxPanX, panX.value))
   panY.value = Math.max(-maxPanY, Math.min(maxPanY, panY.value))
 }
@@ -2019,6 +2208,36 @@ const resetZoom = () => {
   zoom.value = 1
   panX.value = 0
   panY.value = 0
+  updateTransform()
+}
+
+// 自适应缩放：计算所有节点的包围盒，调整 zoom 和 pan 使全部内容可见
+const fitToView = () => {
+  if (!svgCanvas.value || nodes.value.length === 0) {
+    resetZoom()
+    return
+  }
+  const rect = svgCanvas.value.getBoundingClientRect()
+  const padding = 80
+  const minX = Math.min(...nodes.value.map(n => n.x))
+  const maxX = Math.max(...nodes.value.map(n => n.x))
+  const minY = Math.min(...nodes.value.map(n => n.y))
+  const maxY = Math.max(...nodes.value.map(n => n.y))
+
+  const contentW = maxX - minX + 200
+  const contentH = maxY - minY + 200
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+
+  const scaleX = (rect.width - padding * 2) / contentW
+  const scaleY = (rect.height - padding * 2) / contentH
+  zoom.value = Math.min(scaleX, scaleY, 1)
+  zoom.value = Math.max(zoom.value, 0.1)
+
+  // pan 使得内容中心对齐视口中心：pan = -center * zoom
+  panX.value = -centerX * zoom.value
+  panY.value = -centerY * zoom.value
+
   updateTransform()
 }
 
@@ -2149,6 +2368,10 @@ const clearAll = () => {
       queryResult.value = null
       highlightedNodes.value = []
       highlightedLinks.value = []
+      // 清空当前会话的缓存状态
+      if (currentSessionId.value) {
+        sessionStateCache.delete(currentSessionId.value)
+      }
       confirmDialog.value = null
     }
   }
@@ -2181,6 +2404,10 @@ const fetchSessions = async () => {
 
 // 创建新会话并加载
 const createNewSession = async () => {
+  // 切换前先保存旧会话的待保存数据，防止竞态丢失
+  await flushAutoSave()
+  // 缓存当前会话的画布状态
+  cacheCurrentState()
   try {
     const res = await fetch('/api/sessions', {
       method: 'POST',
@@ -2191,12 +2418,17 @@ const createNewSession = async () => {
     if (json.success) {
       currentSessionId.value = json.data.id
       currentSessionName.value = json.data.name || '未命名族谱'
+      // 新会话没有缓存，初始化为空画布
       nodes.value = []
       links.value = []
       showUpload.value = true
+      zoom.value = 1
+      panX.value = 0
+      panY.value = 0
+      history.value = []
+      historyIndex.value = -1
       statusText.value = '新会话已创建，请上传文档'
       await fetchSessions()
-      // 新会话立即触发一次保存占位，随后用户编辑会自动保存
     } else {
       statusText.value = '创建会话失败：' + (json.error?.message || '未知错误')
     }
@@ -2206,8 +2438,26 @@ const createNewSession = async () => {
   }
 }
 
-// 加载指定会话
+// 加载指定会话（优先从缓存恢复，保证会话间数据互不影响）
 const loadSession = async (id) => {
+  // 切换前先保存旧会话的待保存数据，防止竞态丢失
+  await flushAutoSave()
+  // 缓存当前会话的画布状态
+  cacheCurrentState()
+
+  // 优先从缓存恢复（避免不必要的网络请求）
+  if (sessionStateCache.has(id)) {
+    currentSessionId.value = id
+    restoreState(id)
+    applyTreeLayout()
+    // 缓存已保存用户上次的视口位置，直接恢复即可
+    updateTransform()
+    pushHistory()
+    statusText.value = `已加载「${currentSessionName.value}」`
+    return
+  }
+
+  // 缓存未命中，从数据库加载
   try {
     const res = await fetch(`/api/sessions/${id}`)
     const json = await res.json()
@@ -2217,6 +2467,9 @@ const loadSession = async (id) => {
     }
     const data = json.data
     const nodeMap = new Map()
+    // 先更新会话标识，再更新画布数据，避免 watcher 触发时保存到错误会话
+    currentSessionId.value = data.id
+    currentSessionName.value = data.name || '未命名族谱'
     nodes.value = (data.members || []).map(m => {
       const node = {
         id: m.id,
@@ -2244,12 +2497,13 @@ const loadSession = async (id) => {
         relation: r.relation
       }
     }).filter(l => l !== null)
-    currentSessionId.value = data.id
-    currentSessionName.value = data.name || '未命名族谱'
     showUpload.value = nodes.value.length === 0
     applyTreeLayout()
-    resetZoom()
+    // 首次加载无缓存视口，自适应缩放展示全部内容
+    nextTick(() => fitToView())
     pushHistory()
+    // 缓存加载的数据，下次切换时可直接恢复
+    cacheCurrentState()
     statusText.value = `已加载「${currentSessionName.value}」`
   } catch (err) {
     console.error('加载会话失败:', err)
@@ -2257,9 +2511,11 @@ const loadSession = async (id) => {
   }
 }
 
-// 把当前画布数据保存到指定会话
+// 把当前画布数据保存到当前会话（不支持跨会话保存，每个会话数据独立）
 const saveCurrentSessionTo = async (id) => {
   if (!id || nodes.value.length === 0) return
+  // 只允许保存到当前会话，防止跨会话覆盖
+  if (id !== currentSessionId.value) return
   isSaving.value = true
   try {
     const payload = {
@@ -2322,6 +2578,8 @@ const deleteSession = async (id) => {
         const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
         const json = await res.json()
         if (json.success) {
+          // 清除被删除会话的缓存
+          sessionStateCache.delete(id)
           if (currentSessionId.value === id) {
             currentSessionId.value = null
             currentSessionName.value = ''
@@ -2350,7 +2608,8 @@ const startRenameSession = (session) => {
   sessionNameInput.value = session.name
   renameSessionOriginalName = session.name
   nextTick(() => {
-    sessionNameInputRef.value && sessionNameInputRef.value.focus()
+    const el = document.querySelector('.session-name-input')
+    el && el.focus()
   })
 }
 
@@ -2405,8 +2664,20 @@ const scheduleAutoSave = () => {
   if (!autoSaveEnabled.value || !currentSessionId.value || nodes.value.length === 0) return
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null
     saveCurrentSession()
   }, 2000)
+}
+
+// 立即刷出待保存的自动保存（会话切换前调用，确保旧会话数据不丢失）
+const flushAutoSave = async () => {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+    if (currentSessionId.value && nodes.value.length > 0) {
+      await saveCurrentSession()
+    }
+  }
 }
 
 // 监听节点/关系变化，触发自动保存
@@ -2490,6 +2761,7 @@ const handleKeyboard = (e) => {
 }
 
 onMounted(() => {
+  applyTheme()
   document.addEventListener('keydown', handleKeyboard)
   fetchSessions()
 })
@@ -2858,6 +3130,11 @@ select {
   white-space: nowrap;
   font-size: 14px;
   cursor: pointer;
+}
+
+.session-disabled {
+  pointer-events: none;
+  opacity: 0.5;
 }
 
 .session-name-input {
@@ -3278,9 +3555,15 @@ select {
   display: flex;
   align-items: center;
   gap: 18px;
+  flex-wrap: wrap;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
+}
+
+.loading-cancel {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .loading-spinner {

@@ -1,10 +1,15 @@
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
+const WordExtractor = require('word-extractor');
+
+const wordExtractor = new WordExtractor();
 
 // PDF 解析硬性超时（毫秒），避免扫描件/损坏文件导致 worker 长时间卡住
 const PDF_PARSE_TIMEOUT_MS = 30000;
 // DOCX 解析硬性超时（毫秒）
 const DOCX_PARSE_TIMEOUT_MS = 30000;
+// DOC 解析硬性超时（毫秒）
+const DOC_PARSE_TIMEOUT_MS = 30000;
 
 const withTimeout = (promise, ms, label) =>
   Promise.race([
@@ -26,8 +31,7 @@ class DocumentParser {
       case 'docx':
         return this.parseDocx(file.buffer);
       case 'doc':
-        // mammoth 仅支持 .docx；旧版二进制 .doc 必须另存为 .docx 后再上传
-        throw new Error('不支持旧版 .doc 格式，请在 Word 中"另存为 .docx"后重新上传');
+        return this.parseDoc(file.buffer);
       default:
         throw new Error(`不支持的文件格式: .${ext}`);
     }
@@ -48,14 +52,33 @@ class DocumentParser {
 
   async parseDocx(buffer) {
     try {
-      const result = await withTimeout(
-        mammoth.extractRawText({ buffer }),
-        DOCX_PARSE_TIMEOUT_MS,
-        'Word 解析'
-      );
-      return result.value;
+      // mammoth 在处理损坏 .docx 时会从 JSZip 内部抛 "Cannot read properties of undefined (reading 'parseDocx')"
+      // 这种错误有时是同步抛出的（不在 await 中），需要 setImmediate 包一层确保走异步路径
+      const task = new Promise((resolve, reject) => {
+        setImmediate(() => {
+          try {
+            mammoth.extractRawText({ buffer }).then(resolve, reject)
+          } catch (syncErr) {
+            reject(syncErr)
+          }
+        })
+      })
+      const result = await withTimeout(task, DOCX_PARSE_TIMEOUT_MS, 'Word 解析')
+      return result.value
     } catch (error) {
-      throw new Error(`Word文档解析失败: ${error.message}`);
+      throw new Error(`Word文档解析失败: ${error.message}`)
+    }
+  }
+  async parseDoc(buffer) {
+    try {
+      const task = wordExtractor.extract(buffer).then(doc => doc.getBody());
+      const text = await withTimeout(task, DOC_PARSE_TIMEOUT_MS, 'Word(.doc) 解析');
+      if (!text || !text.trim()) {
+        throw new Error('文档内容为空，请确认 .doc 文件中包含文字信息');
+      }
+      return text;
+    } catch (error) {
+      throw new Error(`Word(.doc)文档解析失败: ${error.message}`);
     }
   }
 }

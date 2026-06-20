@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const aiService = require('../services/aiService');
-const { parseDocument } = require('../utils/documentParser');
+const documentParser = require('../utils/documentParser');
 
 // 合法的 force 模式
 const VALID_FORCE_MODES = new Set(['auto', 'cloud', 'local']);
@@ -62,7 +62,7 @@ router.post('/upload', async (req, res) => {
       });
     }
 
-    const content = await parseDocument(file);
+    const content = await documentParser.parseDocument(file);
     const result = await aiService.analyzeDocument(content, userApiKey, force);
 
     res.json({
@@ -74,11 +74,23 @@ router.post('/upload', async (req, res) => {
 
   } catch (error) {
     console.error('文件处理失败:', error);
-    res.status(500).json({
+    // 文档解析阶段的失败（不支持的格式 / 文件损坏 / 超时 / mammoth 内部错误）属于用户输入问题，
+    // 返回 400 + UNSUPPORTED_FORMAT，让前端能区分"用户重传"和"服务异常"
+    const msg = error.message || '文件处理失败';
+    const isUserInputError =
+      msg.includes('不支持') ||
+      msg.includes('格式') ||
+      msg.includes('解析失败') ||
+      msg.includes('超时') ||
+      msg.includes('损坏') ||
+      msg.includes('parseDocx') ||  // mammoth 内部 JSZip 抛出的内部异常
+      msg.includes('JSZip') ||
+      msg.includes('zip file');
+    res.status(isUserInputError ? 400 : 500).json({
       success: false,
       error: {
-        code: 'UPLOAD_ERROR',
-        message: error.message || '文件处理失败'
+        code: isUserInputError ? 'UNSUPPORTED_FORMAT' : 'UPLOAD_ERROR',
+        message: msg
       }
     });
   }
