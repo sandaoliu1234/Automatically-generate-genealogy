@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const multer = require('multer');
 const path = require('path');
 
 // 必须在 require 其它模块（尤其 db/）之前调用，否则 .env 中的 DB_* 等
@@ -12,39 +11,25 @@ const analyzeRouter = require('./routes/analyze');
 const exportRouter = require('./routes/export');
 const importRouter = require('./routes/import');
 const sessionsRouter = require('./routes/sessions');
+const avatarRouter = require('./routes/avatar');
 const { initDb } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3100;
 const HOST = process.env.HOST || '127.0.0.1';
 
-const storage = multer.memoryStorage();
-
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['.txt', '.pdf', '.doc', '.docx'];
-    const ext = path.extname(file.originalname).toLowerCase();
-    
-    if (allowedTypes.includes(ext)) {
-      cb(null, true);
-    } else {
-      cb(new Error(`不支持的文件类型: ${ext}`));
-    }
-  }
-});
-
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-app.use('/api', upload.single('file'), analyzeRouter);
+app.use('/api', analyzeRouter);
 app.use('/api/export', exportRouter);
 app.use('/api/import', importRouter);
 app.use('/api/sessions', sessionsRouter);
+app.use('/api/avatar', avatarRouter);
+
+// 静态文件服务：头像图片
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

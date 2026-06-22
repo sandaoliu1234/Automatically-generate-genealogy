@@ -1,0 +1,57 @@
+.btn {
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+.btn:hover:not(:disabled) { transform: translateY(-1px); }
+.btn:disabled { cursor: not-allowed; opacity: 0.46; }
+
+.btn-primary { background: var(--seal); color: #fff8ed; border-color: rgba(255, 238, 210, 0.14); }
+.btn-primary:hover:not(:disabled) { background: var(--seal-dark); }
+
+.btn-plain { background: rgba(255, 246, 228, 0.1); color: inherit; border-color: rgba(235, 209, 170, 0.32); }
+.btn-plain:hover:not(:disabled) { background: rgba(255, 246, 228, 0.2); }
+.btn-plain.danger { color: #e8a090; }
+
+.btn-sm { height: 30px; padding: 0 12px; font-size: 13px; font-weight: 700; }
+
+.btn-icon {
+  width: 38px; padding: 0; display: grid; place-items: center;
+  background: rgba(255, 246, 228, 0.1); border-color: rgba(235, 209, 170, 0.32);
+  font-size: 18px; font-weight: 400;
+}
+.btn-icon:hover:not(:disabled) { background: rgba(255, 246, 228, 0.2); }
+
+.btn-icon-sm {
+  width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center;
+  background: transparent; border: none; border-radius: 4px;
+  color: var(--muted-ink); cursor: pointer; font-size: 13px;
+}
+.btn-icon-sm:hover:not(:disabled) { background: var(--soft, #f5efe2); color: var(--ink); }
+.btn-icon-sm:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-icon-sm.danger:hover { background: rgba(176, 53, 53, 0.12); color: #b53535; }
+
+.btn-danger { background: #c0392b; color: #fff; border-color: transparent; }
+.btn-danger:hover:not(:disabled) { background: #a93226; }
+
+.btn.large { height: 46px; padding: 0 22px; }
+
+.btn:focus-visible { outline: 2px solid var(--seal); outline-offset: 2px; }
+
+/* AI 服务来源徽章 */
+.provider-badge {
+  display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
+  font-size: 12px; font-weight: 500; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap; user-select: none; letter-spacing: 0.02em;
+}
+.provider-badge.tone-cloud { background: rgba(36, 130, 230, 0.12); color: #2482e6; border-color: rgba(36, 130, 230, 0.32); }
+.provider-badge.tone-local { background: rgba(56, 161, 105, 0.14); color: #2f855a; border-color: rgba(56, 161, 105, 0.32); }
+.provider-badge.tone-fallback { background: rgba(221, 107, 32, 0.14); color: #c05621; border-color: rgba(221, 107, 32, 0.4); }
+
+.toolbar-sep { width: 1px; height: 24px; background: rgba(235, 209, 170, 0.24); }
+.upload-input { display: none; }

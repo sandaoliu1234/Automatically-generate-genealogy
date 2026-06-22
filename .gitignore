@@ -25,6 +25,9 @@ desktop.ini
 *.log
 npm-debug.log*
 
+# Uploaded files
+backend/uploads/
+
 # Trae documents
 .trae/
 
@@ -35,3 +38,8 @@ npm-debug.log*
 .impeccable/
 
 PRODUCT.md
+测试文件.txt
+测试文件.doc
+测试文件.docx
+测试文件.pdf
+

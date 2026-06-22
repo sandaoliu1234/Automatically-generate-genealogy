@@ -44,7 +44,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '会话不存在' } });
     }
     const [members] = await pool.query(
-      'SELECT id, name, gender, generation, birth, death, note, x, y FROM members WHERE genealogy_id = ?',
+      'SELECT id, name, gender, generation, birth, death, note, avatar, x, y FROM members WHERE genealogy_id = ?',
       [id]
     );
     const [relationships] = await pool.query(
@@ -96,7 +96,7 @@ router.put('/:id', async (req, res) => {
     if (members.length > 0) {
       const memberSql = `
         INSERT INTO members
-          (id, genealogy_id, name, gender, generation, birth, death, note, x, y)
+          (id, genealogy_id, name, gender, generation, birth, death, note, avatar, x, y)
         VALUES ?
       `;
       const memberValues = members.map(m => [
@@ -108,6 +108,7 @@ router.put('/:id', async (req, res) => {
         m.birth || null,
         m.death || null,
         m.note || null,
+        m.avatar || null,
         m.x != null ? m.x : null,
         m.y != null ? m.y : null
       ]);

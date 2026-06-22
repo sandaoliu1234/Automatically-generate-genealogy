@@ -38,6 +38,7 @@ const initDb = async () => {
         birth VARCHAR(64),
         death VARCHAR(64),
         note TEXT,
+        avatar VARCHAR(512) DEFAULT NULL,
         x DOUBLE,
         y DOUBLE,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -72,6 +73,14 @@ const initDb = async () => {
           ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    // 为已有表添加缺失列（幂等迁移）
+    const alterStatements = [
+      "ALTER TABLE members ADD COLUMN avatar VARCHAR(512) DEFAULT NULL AFTER note",
+    ];
+    for (const sql of alterStatements) {
+      try { await connection.query(sql); } catch (e) { /* 列已存在时 MySQL 会报重复列错误，忽略即可 */ }
+    }
 
     console.log('[DB] MySQL 表初始化完成');
   } catch (err) {

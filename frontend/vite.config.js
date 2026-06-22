@@ -10,6 +10,10 @@ export default defineConfig({
         // 显式 IPv4，避免 Windows 把 localhost 解析成 ::1（IPv6）导致 ECONNREFUSED
         target: 'http://127.0.0.1:3100',
         changeOrigin: true
+      },
+      '/uploads': {
+        target: 'http://127.0.0.1:3100',
+        changeOrigin: true
       }
     }
   }

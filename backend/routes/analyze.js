@@ -1,7 +1,26 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
 const aiService = require('../services/aiService');
 const documentParser = require('../utils/documentParser');
+
+// 文档上传 multer 配置（只用于 /upload 路由）
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['.txt', '.pdf', '.doc', '.docx'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowedTypes.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`不支持的文件类型: ${ext}`));
+    }
+  }
+});
 
 // 合法的 force 模式
 const VALID_FORCE_MODES = new Set(['auto', 'cloud', 'local']);
@@ -46,7 +65,7 @@ router.post('/analyze', async (req, res) => {
   }
 });
 
-router.post('/upload', async (req, res) => {
+router.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const { file } = req;
     const userApiKey = req.headers['x-api-key'] || null;

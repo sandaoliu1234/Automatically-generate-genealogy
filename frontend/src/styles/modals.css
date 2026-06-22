@@ -1,0 +1,53 @@
+/* ── Modals ── */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(28, 19, 14, 0.58);
+}
+
+.modal-content {
+  width: min(540px, 92vw);
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.modal-content.compact {
+  width: min(430px, 92vw);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-ink);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.modal-close:hover {
+  background: rgba(155, 47, 34, 0.08);
+  color: var(--seal);
+}
+
+.modal-header h3 {
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 24px;
+}
