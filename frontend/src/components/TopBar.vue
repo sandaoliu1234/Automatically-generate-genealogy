@@ -22,7 +22,8 @@
         {{ isLoading ? '分析中' : '上传文档' }}
       </button>
       <button class="btn btn-plain" @click="$emit('openSearch')" :disabled="!hasData" aria-label="搜索人物 (Ctrl+K)" title="搜索人物 (Ctrl+K)">搜索人物</button>
-      <button class="btn btn-plain" @click="$emit('exportImage')" :disabled="!hasData || isLoading" aria-label="导出图片">导出图片</button>
+      <button class="btn btn-plain" @click="$emit('toggleTimeline')" :disabled="!hasData || isLoading" aria-label="时间线视图" title="时间线视图 (T)">⏳ 时间线</button>
+      <button class="btn btn-plain" @click="$emit('exportSvg')" :disabled="!hasData || isLoading" aria-label="导出矢量图" title="导出 SVG 矢量图（无损缩放）">导出矢量图</button>
       <button class="btn btn-plain" @click="$emit('exportGedcom')" :disabled="!hasData || isLoading" aria-label="导出 GEDCOM">导出 GEDCOM</button>
       <button class="btn btn-plain" @click="$emit('toggleTheme')" :aria-label="'切换到' + (theme === 'dark' ? '亮色' : '暗色') + '模式'" :title="'切换到' + (theme === 'dark' ? '亮色' : '暗色') + '模式'">
         {{ theme === 'dark' ? '☀ 亮色' : '🌙 暗色' }}
@@ -45,7 +46,7 @@ defineProps({
 })
 
 defineEmits([
-  'triggerFileUpload', 'openSearch', 'exportImage', 'exportGedcom',
+  'triggerFileUpload', 'openSearch', 'toggleTimeline', 'exportSvg', 'exportGedcom',
   'toggleTheme', 'showHelp', 'clearAll', 'showSettings', 'undo', 'redo',
 ])
 </script>

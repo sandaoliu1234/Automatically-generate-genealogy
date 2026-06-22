@@ -5,7 +5,8 @@
       :provider-badge="sess.providerBadge.value" :can-undo="hist.canUndo.value"
       :can-redo="hist.canRedo.value" :theme="core.theme.value"
       @trigger-file-upload="analysis.triggerFileUpload" @open-search="openSearch"
-      @export-image="exp.exportImage" @export-gedcom="exp.exportGedcom"
+      @toggle-timeline="tl.toggleTimeline"
+      @export-svg="exp.exportSvg" @export-gedcom="exp.exportGedcom"
       @toggle-theme="core.toggleTheme" @show-help="showHelp"
       @clear-all="sess.clearAll" @show-settings="core.showSettings.value = true"
       @undo="hist.undo" @redo="hist.redo"
@@ -83,7 +84,7 @@
           :count-descendants="core.countDescendants" :minimap-props="minimapProps"
           @start-canvas-drag="canvas.startCanvasDrag" @canvas-click="core.onCanvasClick"
           @wheel-zoom="canvas.onWheelZoom" @start-node-drag="canvas.startNodeDrag"
-          @focus-on-node="core.focusOnNode" @toggle-collapse="nodeOps.toggleCollapse"
+          @focus-on-node="onNodeFocus" @toggle-collapse="nodeOps.toggleCollapse"
           @open-context-menu="nodeOps.openContextMenu"
           @zoom-in="canvas.zoomIn" @zoom-out="canvas.zoomOut" @reset-zoom="canvas.resetZoom"
           @minimap-mouse-down="canvas.onMinimapMouseDown"
@@ -105,6 +106,12 @@
     <NodeEditModal v-if="nodeOps.showNodeEdit.value" :editing-node="nodeOps.editingNode.value"
       @close="nodeOps.closeNodeEdit" @save="nodeOps.saveNodeEdit" @delete="nodeOps.deleteNode"
     />
+
+    <!-- Node detail card (right slide-in drawer) -->
+    <NodeDetailCard />
+
+    <!-- Timeline panel (right slide-in drawer) -->
+    <TimelinePanel />
 
     <!-- Confirm dialog -->
     <div v-if="core.confirmDialog.value" class="modal" role="alertdialog" aria-modal="true" aria-label="确认操作">
@@ -150,6 +157,7 @@
         <ul class="help-list">
           <li><kbd>Ctrl</kbd> + <kbd>K</kbd> · 打开人物搜索</li>
           <li><kbd>F</kbd> · 打开人物搜索（同 Ctrl+K）</li>
+          <li><kbd>T</kbd> · 打开 / 关闭时间线视图</li>
           <li><kbd>+</kbd> / <kbd>-</kbd> · 放大 / 缩小</li>
           <li><kbd>0</kbd> · 重置视图（缩放 + 平移）</li>
           <li><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Y</kbd> · 撤销 / 重做</li>
@@ -181,12 +189,18 @@ import { useRelationshipQuery } from './composables/useRelationshipQuery'
 import { useExport } from './composables/useExport'
 import { useNodeOperations } from './composables/useNodeOperations'
 import { useStatistics } from './composables/useStatistics'
+import { useNodeDetail } from './composables/useNodeDetail'
+import { useTimeline } from './composables/useTimeline'
 import TopBar from './components/TopBar.vue'
 import SidePanel from './components/SidePanel.vue'
 import GenealogyCanvas from './components/GenealogyCanvas.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import NodeEditModal from './components/NodeEditModal.vue'
+import NodeDetailCard from './components/NodeDetailCard.vue'
+import TimelinePanel from './components/TimelinePanel.vue'
 import ContextMenu from './components/ContextMenu.vue'
+import './styles/node-detail.css'
+import './styles/timeline.css'
 
 // 导入并初始化 composables（单例模式，顺序重要）
 const core = useGenealogyCore()
@@ -198,6 +212,8 @@ const query = useRelationshipQuery()
 const exp = useExport()
 const nodeOps = useNodeOperations()
 const stats = useStatistics()
+const detail = useNodeDetail()
+const tl = useTimeline()
 
 // Template refs
 const fileInput = ref(null)
@@ -235,6 +251,12 @@ const selectSearchResult = (node) => {
 
 // 帮助弹窗
 const showHelp = () => { core.showHelpModal.value = true }
+
+// 单击节点：聚焦高亮 + 打开右侧详情卡片
+const onNodeFocus = (node) => {
+  core.focusOnNode(node)
+  detail.openNodeDetail(node)
+}
 const closeHelp = () => { core.showHelpModal.value = false }
 
 // 画布 template refs 同步到 composables
@@ -258,6 +280,14 @@ watch(core.theme, () => core.applyTheme())
 // 监听节点/关系变化，触发自动保存
 watch([core.nodes, core.links], () => { sess.scheduleAutoSave() }, { deep: true })
 
+// 时间线 ↔ 详情卡片 互斥
+watch(detail.isDetailOpen, (open) => {
+  if (open && tl.isOpen.value) tl.closeTimeline()
+})
+watch(tl.isOpen, (open) => {
+  if (open && detail.isDetailOpen.value) detail.closeNodeDetail()
+})
+
 // 监听自动保存开关
 watch(sess.autoSaveEnabled, (val) => {
   localStorage.setItem('genealogy_autosave', String(val))
@@ -274,8 +304,11 @@ const handleKeyboard = (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y' || (e.shiftKey && (e.key === 'z' || e.key === 'Z')))) { e.preventDefault(); hist.redo(); return }
   if (e.ctrlKey || e.metaKey || e.altKey) return
   if (e.key === 'f' || e.key === 'F') { if (core.hasData.value) openSearch(); return }
+  if (e.key === 't' || e.key === 'T') { if (core.hasData.value) tl.toggleTimeline(); return }
   if (e.key === '?' || (e.shiftKey && e.key === '/')) { e.preventDefault(); showHelp(); return }
   if (e.key === 'Escape') {
+    if (tl.isOpen.value) { tl.closeTimeline(); return }
+    if (detail.isDetailOpen.value) { detail.closeNodeDetail(); return }
     if (core.showSearchModal.value) { closeSearch(); return }
     if (core.showHelpModal.value) { closeHelp(); return }
     if (core.showSettings.value) { sess.closeSettings(); return }

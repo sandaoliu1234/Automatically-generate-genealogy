@@ -1,0 +1,563 @@
+/* ── Timeline Drawer (right slide-in) ── */
+.timeline-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 420px;
+  max-width: 94vw;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #faf6f0);
+  border-left: 1px solid var(--line, #d8cdb8);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.timeline-drawer .detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line, #d8cdb8);
+  background: var(--panel-2, rgba(0, 0, 0, 0.02));
+  flex-shrink: 0;
+}
+
+.timeline-drawer .section-label {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted, #8a7c66);
+  font-weight: 600;
+}
+
+.timeline-drawer .modal-close {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted, #8a7c66);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.timeline-drawer .modal-close:hover {
+  background: var(--panel-2, rgba(0, 0, 0, 0.06));
+  color: var(--text, #2a2520);
+}
+
+/* ── 姓氏统计条 (Surname Bar) ── */
+.surname-bar {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line, #d8cdb8);
+  flex-shrink: 0;
+  max-height: 38%;
+  overflow-y: auto;
+}
+
+.surname-bar-title {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted, #8a7c66);
+  margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.surname-bar-clear {
+  background: transparent;
+  border: 1px solid var(--line, #d8cdb8);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--muted, #8a7c66);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.surname-bar-clear:hover {
+  background: var(--panel-2, rgba(0, 0, 0, 0.06));
+}
+
+.surname-bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.surname-bar-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text, #2a2520);
+  text-align: left;
+  width: 100%;
+  transition: background 0.15s;
+}
+
+.surname-bar-row:hover {
+  background: var(--panel-2, rgba(0, 0, 0, 0.05));
+}
+
+.surname-bar-row.active {
+  background: rgba(125, 58, 44, 0.12);
+  color: #7d3a2c;
+  font-weight: 600;
+}
+
+.surname-bar-char {
+  font-weight: 600;
+  font-size: 13px;
+  text-align: center;
+}
+
+.surname-bar-track {
+  position: relative;
+  height: 8px;
+  background: var(--panel-2, rgba(0, 0, 0, 0.05));
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.surname-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #7d3a2c 0%, #c97a8a 100%);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.surname-bar-row.active .surname-bar-fill {
+  background: linear-gradient(90deg, #5b2418 0%, #7d3a2c 100%);
+}
+
+.surname-bar-count {
+  font-size: 11px;
+  color: var(--muted, #8a7c66);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 视图切换 Tab ── */
+.timeline-tabs {
+  display: flex;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line, #d8cdb8);
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.timeline-tab {
+  background: transparent;
+  border: none;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--muted, #8a7c66);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+  font-weight: 500;
+}
+
+.timeline-tab:hover {
+  color: var(--text, #2a2520);
+}
+
+.timeline-tab.active {
+  color: #7d3a2c;
+  border-bottom-color: #7d3a2c;
+  font-weight: 600;
+}
+
+.timeline-search {
+  flex: 1;
+  margin-left: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--panel-2, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--line, #d8cdb8);
+  border-radius: 4px;
+  color: var(--text, #2a2520);
+  outline: none;
+}
+
+.timeline-search:focus {
+  border-color: #7d3a2c;
+}
+
+/* ── 时间线主体 ── */
+.timeline-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+  position: relative;
+}
+
+.timeline-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted, #8a7c66);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+
+.timeline-empty-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}
+
+/* ── 年代刻度尺 ── */
+.timeline-axis {
+  position: sticky;
+  top: 0;
+  background: var(--panel, #faf6f0);
+  padding: 4px 0 6px;
+  z-index: 2;
+  border-bottom: 1px dashed var(--line, #d8cdb8);
+  margin-bottom: 8px;
+}
+
+.timeline-axis-track {
+  position: relative;
+  height: 18px;
+}
+
+.timeline-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line, #d8cdb8);
+  transform: translateX(-0.5px);
+}
+
+.timeline-tick.major {
+  background: var(--muted, #8a7c66);
+}
+
+.timeline-tick-label {
+  position: absolute;
+  top: 0;
+  font-size: 9px;
+  color: var(--muted, #8a7c66);
+  transform: translateX(-50%);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.timeline-hover-year {
+  position: absolute;
+  top: -2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #7d3a2c;
+  background: var(--panel, #faf6f0);
+  padding: 0 4px;
+  border-radius: 3px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* ── 泳道 (Swimlane) ── */
+.timeline-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.timeline-lane {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 8px;
+  align-items: stretch;
+  min-height: 32px;
+}
+
+.timeline-lane-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text, #2a2520);
+  background: var(--panel-2, rgba(0, 0, 0, 0.04));
+  border-radius: 4px;
+  padding: 4px 6px;
+  text-align: center;
+  border: 1px solid var(--line, #d8cdb8);
+  align-self: start;
+}
+
+.timeline-lane-track {
+  position: relative;
+  height: 32px;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(10% - 1px),
+    rgba(0, 0, 0, 0.04) calc(10% - 1px),
+    rgba(0, 0, 0, 0.04) 10%
+  );
+  border-radius: 4px;
+}
+
+/* ── 人物节点（出生●— 死亡│） ── */
+.timeline-person {
+  position: absolute;
+  top: 50%;
+  height: 10px;
+  transform: translateY(-50%);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  border-radius: 5px;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.timeline-person:hover {
+  transform: translateY(-50%) scale(1.4);
+  z-index: 5;
+  box-shadow: 0 2px 6px rgba(125, 58, 44, 0.3);
+}
+
+.timeline-person-birth {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1.5px solid;
+}
+
+.timeline-person-birth.male {
+  background: #5b8db8;
+  border-color: #2d5d83;
+}
+
+.timeline-person-birth.female {
+  background: #c97a8a;
+  border-color: #8b4d63;
+}
+
+.timeline-person-birth.unknown {
+  background: #999;
+  border-color: #666;
+}
+
+.timeline-person-life {
+  flex: 1;
+  height: 2px;
+  background: rgba(0, 0, 0, 0.25);
+  min-width: 2px;
+}
+
+.timeline-person-birth.female + .timeline-person-life {
+  background: rgba(201, 122, 138, 0.6);
+}
+
+.timeline-person-birth.male + .timeline-person-life {
+  background: rgba(91, 141, 184, 0.6);
+}
+
+.timeline-person-death {
+  width: 2px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
+.timeline-person-death.male {
+  background: #2d5d83;
+}
+
+.timeline-person-death.female {
+  background: #8b4d63;
+}
+
+.timeline-person-death.unknown {
+  background: #666;
+}
+
+/* 悬停 tooltip */
+.timeline-tooltip {
+  position: fixed;
+  z-index: 100;
+  background: rgba(20, 15, 10, 0.92);
+  color: #f6dfbd;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.timeline-tooltip-name {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.timeline-tooltip-meta {
+  font-size: 10px;
+  color: #c9bba3;
+}
+
+/* ── 缩放控制 ── */
+.timeline-zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--line, #d8cdb8);
+  background: var(--panel-2, rgba(0, 0, 0, 0.02));
+  flex-shrink: 0;
+}
+
+.timeline-zoom-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--line, #d8cdb8);
+  background: var(--panel, #faf6f0);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text, #2a2520);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.timeline-zoom-btn:hover {
+  background: var(--panel-2, rgba(0, 0, 0, 0.06));
+}
+
+.timeline-zoom-label {
+  font-size: 10px;
+  color: var(--muted, #8a7c66);
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: center;
+}
+
+.timeline-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted, #8a7c66);
+}
+
+/* ── 滑入动画 (与详情卡片一致) ── */
+.slide-in-enter-active,
+.slide-in-leave-active {
+  transition: transform 0.25s ease;
+}
+
+.slide-in-enter-from,
+.slide-in-leave-to {
+  transform: translateX(100%);
+}
+
+/* ── 暗色模式适配 ── */
+@media (prefers-color-scheme: dark) {
+  .timeline-drawer {
+    background: #1f1a14;
+    border-left-color: #3a3128;
+  }
+  .timeline-drawer .detail-header {
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom-color: #3a3128;
+  }
+  .timeline-drawer .section-label,
+  .timeline-drawer .modal-close {
+    color: #a89880;
+  }
+  .timeline-drawer .modal-close:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #f6dfbd;
+  }
+  .surname-bar,
+  .timeline-tabs,
+  .timeline-zoom {
+    border-color: #3a3128;
+  }
+  .surname-bar-title,
+  .surname-bar-count,
+  .timeline-zoom-label,
+  .timeline-count {
+    color: #a89880;
+  }
+  .surname-bar-row,
+  .timeline-tab {
+    color: #e0d3b8;
+  }
+  .surname-bar-row:hover,
+  .timeline-tab:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .surname-bar-row.active {
+    background: rgba(125, 58, 44, 0.25);
+    color: #f6dfbd;
+  }
+  .surname-bar-track {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .surname-bar-clear {
+    border-color: #3a3128;
+    color: #a89880;
+  }
+  .timeline-tab.active {
+    color: #f6dfbd;
+    border-bottom-color: #c97a8a;
+  }
+  .timeline-search {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: #3a3128;
+    color: #e0d3b8;
+  }
+  .timeline-axis {
+    background: #1f1a14;
+  }
+  .timeline-tick {
+    background: #3a3128;
+  }
+  .timeline-tick.major {
+    background: #a89880;
+  }
+  .timeline-lane-label {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: #3a3128;
+    color: #e0d3b8;
+  }
+  .timeline-lane-track {
+    background-image: repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent calc(10% - 1px),
+      rgba(255, 255, 255, 0.04) calc(10% - 1px),
+      rgba(255, 255, 255, 0.04) 10%
+    );
+  }
+}
